@@ -1,0 +1,27 @@
+Task #,Phase,Phase Name,Description,Status
+1,1,Foundation,Create GitHub repo and Railway project and link them,Not Started
+2,1,Foundation,"Initialize TypeScript/Node.js project with Fastify — package.json, tsconfig.json, folder structure",Not Started
+3,1,Foundation,Set up Supabase project and run schema migrations (6 tables),Not Started
+4,1,Foundation,Configure environment variables across Railway and local .env,Not Started
+5,1,Foundation,Deploy skeleton server to Railway with /health endpoint — confirm it stays up,Not Started
+6,2,Integration Clients,"Build Jobtread API client (Pave query wrapper, typed helpers for jobs/tasks/documents/comments)",Not Started
+7,2,Integration Clients,Build Slack bot client (install bot to Thomas Pools workspace — Socket Mode setup),Not Started
+8,2,Integration Clients,Build Twilio client (outbound SMS + inbound webhook receiver),Not Started
+9,2,Integration Clients,Build Claude API client (prompt wrapper + retry logic),Not Started
+10,2,Integration Clients,Build Google Calendar client (OAuth setup + create/update event helpers),Not Started
+11,2,Integration Clients,Build HubSpot client (read customer contacts and payment data),Not Started
+12,3,Read-Only Cases,Case 5: /status slash command — Jobtread read → Claude summarize → Slack reply,Not Started
+13,3,Read-Only Cases,Case 1: Morning health check cron (7 AM) — per-PM Slack summaries,Not Started
+14,3,Read-Only Cases,Case 6: Evening leadership report cron (5 PM) — aggregate and post to #daily-report,Not Started
+15,4,Write Cases,Case 2: Vendor outreach — cron fires + checks outreach log + sends SMS via Twilio + logs in Supabase,Not Started
+16,4,Write Cases,Case 2 inbound: Twilio webhook receives vendor reply + logs it + alerts PM in Slack if flagged,Not Started
+17,4,Write Cases,Case 2 follow-up: 24-hour re-ping and 48-hour PM escalation logic,Not Started
+18,4,Write Cases,Case 3: Slack project channel listener — Claude extracts update → writes comment to Jobtread → confirms in channel,Not Started
+19,5,Remaining Cases,Case 4: Google Calendar sync — detect new/changed Jobtread milestones and create/update calendar events,Not Started
+20,5,Remaining Cases,Case 7: Payment milestone reminders — cross-reference Jobtread documents against payment schedule + Slack alerts,Not Started
+21,6,Hardening,Error alerting to #agent-errors Slack channel,Not Started
+22,6,Hardening,Idempotency guards (prevent duplicate SMS + duplicate calendar events + duplicate alerts),Not Started
+23,6,Hardening,Retry logic on Jobtread/Twilio/Slack API failures,Not Started
+24,6,Hardening,Populate Supabase with Thomas Pools' real vendor roster and payment schedules,Not Started
+25,6,Hardening,End-to-end test run on live data with Thomas Pools team,Not Started
+26,6,Hardening,Hand off grant key rotation schedule and monitoring runbook,Not Started
