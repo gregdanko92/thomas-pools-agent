@@ -1,0 +1,24 @@
+{
+  "name": "thomas-pools-agent",
+  "version": "1.0.0",
+  "description": "AI agent for Thomas Pools — project monitoring, vendor outreach, Slack/Jobtread sync",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gregdanko92/thomas-pools-agent.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "fastify": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^7.0.2"
+  }
+}
