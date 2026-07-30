@@ -25,6 +25,19 @@ function accountSid(): string {
   return sid
 }
 
+function apiKeySid(): string {
+  const sid = process.env.TWILIO_API_KEY_SID
+  if (!sid) throw new Error('TWILIO_API_KEY_SID is not set')
+  return sid
+}
+
+function apiKeySecret(): string {
+  const secret = process.env.TWILIO_API_KEY_SECRET
+  if (!secret) throw new Error('TWILIO_API_KEY_SECRET is not set')
+  return secret
+}
+
+// Auth token is still required by Twilio for webhook signature validation — API keys cannot replace it there.
 function authToken(): string {
   const token = process.env.TWILIO_AUTH_TOKEN
   if (!token) throw new Error('TWILIO_AUTH_TOKEN is not set')
@@ -43,7 +56,7 @@ let _client: twilio.Twilio | null = null
 
 function getClient(): twilio.Twilio {
   if (!_client) {
-    _client = twilio(accountSid(), authToken())
+    _client = twilio(apiKeySid(), apiKeySecret(), { accountSid: accountSid() })
   }
   return _client
 }
