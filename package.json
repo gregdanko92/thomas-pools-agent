@@ -20,6 +20,7 @@
     "@supabase/supabase-js": "^2.111.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.10.0",
+    "googleapis": "^173.0.0",
     "twilio": "^6.0.2"
   },
   "devDependencies": {
