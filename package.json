@@ -15,6 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@hubspot/api-client": "^14.0.1",
     "@slack/bolt": "^5.0.0",
     "@slack/types": "^3.0.0",
     "@supabase/supabase-js": "^2.111.0",
