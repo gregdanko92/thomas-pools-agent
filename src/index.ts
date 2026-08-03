@@ -35,8 +35,10 @@ server.get('/debug/job-fields', async (_req, reply) => {
   const tryField = async (fieldQuery: Record<string, unknown>) => {
     const body = JSON.stringify({ query: { $: { grantKey }, job: { $: { id: jobId }, id: true, name: true, ...fieldQuery } } })
     const res = await fetch(PAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
-    const json = await res.json()
-    return { ok: res.ok, status: res.status, body: json }
+    const text = await res.text()
+    let parsed: unknown
+    try { parsed = JSON.parse(text) } catch { parsed = text }
+    return { ok: res.ok, status: res.status, body: parsed }
   }
 
   const [accountResult, contactResult, ownerResult] = await Promise.all([
