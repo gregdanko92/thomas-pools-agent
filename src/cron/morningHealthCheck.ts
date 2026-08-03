@@ -30,7 +30,10 @@ function buildPrompt(jobs: JobDetail[], totalActive: number): string {
   ]
 
   for (const job of jobs) {
-    lines.push(`JOB: ${job.name}`)
+    const name = /^job\s/i.test(job.name) && job.location?.address
+      ? `${job.name} — ${job.location.address}`
+      : job.name
+    lines.push(`JOB: ${name}`)
     lines.push(`Status: ${job.status} | Created: ${(job.createdAt ?? '').slice(0, 10) || 'unknown'}`)
     if (job.location?.address) lines.push(`Location: ${job.location.address}`)
 
