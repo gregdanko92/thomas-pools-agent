@@ -159,10 +159,8 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   const org = data.organization as Record<string, unknown> | null
   if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
 
-  const jobsResult = org.jobs as Record<string, unknown>
-  console.log('[jobtread] organization.jobs keys:', Object.keys(jobsResult))
-
-  const allJobs = (jobsResult.nodes as Job[]) ?? []
+  const jobsResult = org.jobs as { nodes: Job[] }
+  const allJobs = jobsResult.nodes
 
   if (statuses?.length) {
     return allJobs.filter(j => statuses.includes(j.status))
