@@ -136,12 +136,14 @@ export interface ListJobsOptions {
   statuses?: string[]
 }
 
-export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
-  const { search, statuses } = options
-  const whereValue = search ? `%${search}%` : '%'
+// Pave API returns ~10 results per page with no pagination metadata.
+// Bypass by issuing one query per leading character (A-Z, 0-9) in parallel
+// and deduplicating by ID. Each bucket has far fewer than 10 jobs in practice.
+const PREFIXES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('')
 
+async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
   const jobsParam: Record<string, unknown> = {
-    $: { where: ['name', 'like', whereValue] },
+    $: { where: ['name', 'like', `${prefix}%`] },
     nodes: {
       id: true,
       name: true,
@@ -151,16 +153,47 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
       location: { id: true, name: true, address: true },
     },
   }
-
-  const data = await pave({
-    organization: { $: { id: orgId() }, jobs: jobsParam },
-  })
-
+  const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
   const org = data.organization as Record<string, unknown> | null
-  if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
+  if (!org) return []
+  return ((org.jobs as { nodes: Job[] }).nodes) ?? []
+}
 
-  const jobsResult = org.jobs as { nodes: Job[] }
-  const allJobs = jobsResult.nodes
+async function listAllJobs(): Promise<Job[]> {
+  const batches = await Promise.allSettled(PREFIXES.map(fetchJobsWithPrefix))
+  const seen = new Set<string>()
+  const all: Job[] = []
+  for (const result of batches) {
+    if (result.status === 'rejected') continue
+    for (const job of result.value) {
+      if (!seen.has(job.id)) {
+        seen.add(job.id)
+        all.push(job)
+      }
+    }
+  }
+  return all
+}
+
+export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
+  const { search, statuses } = options
+
+  let allJobs: Job[]
+  if (search) {
+    const jobsParam: Record<string, unknown> = {
+      $: { where: ['name', 'like', `%${search}%`] },
+      nodes: {
+        id: true, name: true, status: true, createdAt: true, closedOn: true,
+        location: { id: true, name: true, address: true },
+      },
+    }
+    const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
+    const org = data.organization as Record<string, unknown> | null
+    if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
+    allJobs = ((org.jobs as { nodes: Job[] }).nodes) ?? []
+  } else {
+    allJobs = await listAllJobs()
+  }
 
   if (statuses?.length) {
     return allJobs.filter(j => statuses.includes(j.status))
