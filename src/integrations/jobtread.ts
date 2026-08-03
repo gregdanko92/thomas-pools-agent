@@ -141,9 +141,13 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
 
   // Pave API does not support filtering jobs by `status` in the where clause —
   // only `name` (via like) is known to work. Status filtering is applied client-side.
-  const where: unknown = search ? ['name', 'like', `%${search}%`] : undefined
+  // When no search is given, request a large batch to cover all active jobs.
+  const dollarParams: Record<string, unknown> = search
+    ? { where: ['name', 'like', `%${search}%`] }
+    : { first: 500 }
 
   const jobsParam: Record<string, unknown> = {
+    $: dollarParams,
     nodes: {
       id: true,
       name: true,
@@ -156,9 +160,6 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
         address: true,
       },
     },
-  }
-  if (where !== undefined) {
-    jobsParam.$ = { where }
   }
 
   const data = await pave({
