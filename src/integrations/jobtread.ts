@@ -131,24 +131,29 @@ function mapTask(t: Record<string, unknown>): Task {
 
 // --- Query helpers ---
 
-export async function listJobs(): Promise<Job[]> {
+export async function listJobs(search?: string): Promise<Job[]> {
+  const jobsParam: Record<string, unknown> = {
+    nodes: {
+      id: true,
+      name: true,
+      status: true,
+      createdAt: true,
+      closedOn: true,
+      location: {
+        id: true,
+        name: true,
+        address: true,
+      },
+    },
+  }
+  if (search) {
+    jobsParam.$ = { where: ['name', 'like', `%${search}%`] }
+  }
+
   const data = await pave({
     organization: {
       $: { id: orgId() },
-      jobs: {
-        nodes: {
-          id: true,
-          name: true,
-          status: true,
-          createdAt: true,
-          closedOn: true,
-          location: {
-            id: true,
-            name: true,
-            address: true,
-          },
-        },
-      },
+      jobs: jobsParam,
     },
   })
 

@@ -1,5 +1,5 @@
 import { listJobs, getJob } from '../integrations/jobtread'
-import type { Job, JobDetail } from '../integrations/jobtread'
+import type { JobDetail } from '../integrations/jobtread'
 import { registerSlashCommand } from '../integrations/slack'
 import { complete } from '../integrations/claude'
 
@@ -8,10 +8,6 @@ Summarize job status for a project manager in plain text, under 250 words.
 Cover: current job status, task progress (how many done vs total), any overdue or blocked items, recent activity from comments, and next steps.
 Be direct and factual. No markdown headers — write in short paragraphs.`
 
-function findAllMatches(jobs: Job[], query: string): Job[] {
-  const q = query.toLowerCase()
-  return jobs.filter(j => j.name.toLowerCase().includes(q))
-}
 
 function buildPrompt(job: JobDetail): string {
   const lines: string[] = []
@@ -71,8 +67,7 @@ function buildPrompt(job: JobDetail): string {
 }
 
 export async function runStatusCase(jobName: string): Promise<string> {
-  const jobs = await listJobs()
-  const matches = findAllMatches(jobs, jobName)
+  const matches = await listJobs(jobName)
 
   if (matches.length === 0) {
     return `No job found matching "${jobName}". Check the job name and try again.`
