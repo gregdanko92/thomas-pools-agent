@@ -1,13 +1,13 @@
 const PAVE_URL = 'https://api.jobtread.com/pave'
 
 function grantKey(): string {
-  const key = process.env.JOBTREAD_GRANT_KEY
+  const key = process.env.JOBTREAD_GRANT_KEY?.trim()
   if (!key) throw new Error('JOBTREAD_GRANT_KEY is not set')
   return key
 }
 
 function orgId(): string {
-  const id = process.env.JOBTREAD_ORG_ID
+  const id = process.env.JOBTREAD_ORG_ID?.trim()
   if (!id) throw new Error('JOBTREAD_ORG_ID is not set')
   return id
 }
@@ -95,18 +95,15 @@ export interface CreateTaskInput {
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   const body = JSON.stringify({ grantKey: grantKey(), query })
-  console.log('[jobtread] pave request body length:', body.length, 'grantKey prefix:', grantKey().slice(0, 6), 'orgId:', orgId())
   const res = await fetch(PAVE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
   })
-  console.log('[jobtread] pave response status:', res.status)
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    console.log('[jobtread] pave error body:', text)
-    throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText} — ${text}`)
+    throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText}${text ? ` — ${text}` : ''}`)
   }
 
   let json: Record<string, unknown>
