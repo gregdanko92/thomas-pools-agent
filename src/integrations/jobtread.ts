@@ -139,16 +139,9 @@ export interface ListJobsOptions {
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   const { search, statuses } = options
 
-  let where: unknown
-  if (search && statuses?.length) {
-    where = { and: [['name', 'like', `%${search}%`], { or: statuses.map(s => ['status', '=', s]) }] }
-  } else if (search) {
-    where = ['name', 'like', `%${search}%`]
-  } else if (statuses?.length) {
-    where = statuses.length === 1
-      ? ['status', '=', statuses[0]]
-      : { or: statuses.map(s => ['status', '=', s]) }
-  }
+  // Pave API does not support filtering jobs by `status` in the where clause —
+  // only `name` (via like) is known to work. Status filtering is applied client-side.
+  const where: unknown = search ? ['name', 'like', `%${search}%`] : undefined
 
   const jobsParam: Record<string, unknown> = {
     nodes: {
@@ -177,8 +170,12 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
 
   const org = data.organization as Record<string, unknown> | null
   if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
-  const jobs = org.jobs as { nodes: Job[] }
-  return jobs.nodes
+  const allJobs = (org.jobs as { nodes: Job[] }).nodes
+
+  if (statuses?.length) {
+    return allJobs.filter(j => statuses.includes(j.status))
+  }
+  return allJobs
 }
 
 export async function getJob(jobId: string): Promise<JobDetail> {
