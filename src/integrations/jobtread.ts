@@ -102,7 +102,8 @@ async function pave(query: Record<string, unknown>): Promise<Record<string, unkn
   })
 
   if (!res.ok) {
-    throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText}`)
+    const text = await res.text().catch(() => '')
+    throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText} — ${text}`)
   }
 
   let json: Record<string, unknown>
