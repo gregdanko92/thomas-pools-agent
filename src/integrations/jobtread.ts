@@ -139,12 +139,11 @@ export interface ListJobsOptions {
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   const { search, statuses } = options
 
-  // Pave API does not support filtering jobs by `status` in the where clause —
-  // only `name` (via like) is known to work. Status filtering is applied client-side.
-  // When no search is given, request a large batch to cover all active jobs.
-  const dollarParams: Record<string, unknown> = search
-    ? { where: ['name', 'like', `%${search}%`] }
-    : { first: 500 }
+  // Pave API does not support filtering jobs by `status` in the where clause,
+  // and numeric pagination params are rejected. A `where` filter with `%` returns
+  // all matching records without a default page cap, so we always provide one.
+  const where = search ? `%${search}%` : '%'
+  const dollarParams = { where: ['name', 'like', where] }
 
   const jobsParam: Record<string, unknown> = {
     $: dollarParams,
