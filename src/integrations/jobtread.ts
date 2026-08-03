@@ -18,8 +18,8 @@ export interface Job {
   id: string
   name: string
   status: string
-  startDate: string | null
-  endDate: string | null
+  createdAt: string | null
+  closedOn: string | null
   location: JobLocation | null
 }
 
@@ -72,8 +72,7 @@ export interface CommentAuthor {
 
 export interface UpdateJobInput {
   status?: string
-  startDate?: string
-  endDate?: string
+  closedOn?: string
   name?: string
 }
 
@@ -143,8 +142,8 @@ export async function listJobs(): Promise<Job[]> {
           id: true,
           name: true,
           status: true,
-          startDate: true,
-          endDate: true,
+          createdAt: true,
+          closedOn: true,
           location: {
             id: true,
             name: true,
@@ -155,7 +154,8 @@ export async function listJobs(): Promise<Job[]> {
     },
   })
 
-  const org = data.organization as Record<string, unknown>
+  const org = data.organization as Record<string, unknown> | null
+  if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
   const jobs = org.jobs as { nodes: Job[] }
   return jobs.nodes
 }
@@ -167,8 +167,8 @@ export async function getJob(jobId: string): Promise<JobDetail> {
       id: true,
       name: true,
       status: true,
-      startDate: true,
-      endDate: true,
+      createdAt: true,
+      closedOn: true,
       location: {
         id: true,
         name: true,
@@ -224,8 +224,8 @@ export async function getJob(jobId: string): Promise<JobDetail> {
     id: raw.id as string,
     name: raw.name as string,
     status: raw.status as string,
-    startDate: (raw.startDate as string | null) ?? null,
-    endDate: (raw.endDate as string | null) ?? null,
+    createdAt: (raw.createdAt as string | null) ?? null,
+    closedOn: (raw.closedOn as string | null) ?? null,
     location: (raw.location as JobLocation | null) ?? null,
     tasks,
     documents,
@@ -329,8 +329,8 @@ export async function updateJob(jobId: string, input: UpdateJobInput): Promise<J
       id: true,
       name: true,
       status: true,
-      startDate: true,
-      endDate: true,
+      createdAt: true,
+      closedOn: true,
       location: {
         id: true,
         name: true,

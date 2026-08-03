@@ -18,8 +18,8 @@ function buildPrompt(job: JobDetail): string {
 
   lines.push(`Job: ${job.name}`)
   lines.push(`Status: ${job.status}`)
-  lines.push(`Start Date: ${job.startDate ?? 'not set'}`)
-  lines.push(`End Date: ${job.endDate ?? 'not set'}`)
+  lines.push(`Created: ${job.createdAt ? job.createdAt.slice(0, 10) : 'unknown'}`)
+  lines.push(`Closed: ${job.closedOn ?? 'open'}`)
   if (job.location) {
     const addr = job.location.address ? ` — ${job.location.address}` : ''
     lines.push(`Location: ${job.location.name}${addr}`)
