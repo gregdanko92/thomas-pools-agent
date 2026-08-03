@@ -31,9 +31,10 @@ function buildPrompt(job: JobDetail): string {
     lines.push('  (none)')
   } else {
     for (const task of job.tasks) {
-      const assigned = task.assignedUsers.map(u => u.name).join(', ') || 'unassigned'
+      const assigned = task.account?.name ?? 'unassigned'
+      const kind = task.isToDo ? 'to-do' : 'scheduled'
       const dates = [task.startDate, task.endDate].filter(Boolean).join(' to ')
-      lines.push(`  - ${task.name} [${task.status}]${dates ? ` (${dates})` : ''} — ${assigned}`)
+      lines.push(`  - ${task.name} [${kind}]${dates ? ` (${dates})` : ''} — ${assigned}`)
     }
   }
 
@@ -43,7 +44,7 @@ function buildPrompt(job: JobDetail): string {
     lines.push('  (none)')
   } else {
     for (const doc of job.documents) {
-      const total = doc.total !== null ? ` — $${doc.total.toLocaleString()}` : ''
+      const total = doc.price !== null ? ` — $${doc.price.toLocaleString()}` : ''
       lines.push(`  - ${doc.name} [${doc.type} / ${doc.status}]${total}`)
     }
   }
@@ -60,7 +61,7 @@ function buildPrompt(job: JobDetail): string {
     lines.push('  (none)')
   } else {
     for (const c of recentComments) {
-      const author = c.createdBy?.name ?? 'Unknown'
+      const author = c.account?.name ?? 'Unknown'
       const date = (c.createdAt ?? '').slice(0, 10) || 'unknown date'
       lines.push(`  [${date}] ${author}: ${c.message}`)
     }

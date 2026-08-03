@@ -38,13 +38,13 @@ export interface JobDetail extends Job {
 export interface Task {
   id: string
   name: string
-  status: string
+  isToDo: boolean
   startDate: string | null
   endDate: string | null
-  assignedUsers: AssignedUser[]
+  account: TaskAccount | null
 }
 
-export interface AssignedUser {
+export interface TaskAccount {
   id: string
   name: string
 }
@@ -54,7 +54,7 @@ export interface Document {
   name: string
   type: string
   status: string
-  total: number | null
+  price: number | null
   createdAt: string
 }
 
@@ -62,10 +62,10 @@ export interface Comment {
   id: string
   message: string
   createdAt: string
-  createdBy: CommentAuthor | null
+  account: CommentAccount | null
 }
 
-export interface CommentAuthor {
+export interface CommentAccount {
   id: string
   name: string
 }
@@ -77,7 +77,6 @@ export interface UpdateJobInput {
 }
 
 export interface UpdateTaskInput {
-  status?: string
   startDate?: string
   endDate?: string
   name?: string
@@ -85,7 +84,6 @@ export interface UpdateTaskInput {
 
 export interface CreateTaskInput {
   name: string
-  status?: string
   startDate?: string
   endDate?: string
 }
@@ -124,10 +122,10 @@ function mapTask(t: Record<string, unknown>): Task {
   return {
     id: t.id as string,
     name: t.name as string,
-    status: t.status as string,
+    isToDo: t.isToDo as boolean,
     startDate: (t.startDate as string | null) ?? null,
     endDate: (t.endDate as string | null) ?? null,
-    assignedUsers: (t.assignedUsers as { nodes: AssignedUser[] }).nodes,
+    account: (t.account as TaskAccount | null) ?? null,
   }
 }
 
@@ -178,14 +176,12 @@ export async function getJob(jobId: string): Promise<JobDetail> {
         nodes: {
           id: true,
           name: true,
-          status: true,
+          isToDo: true,
           startDate: true,
           endDate: true,
-          assignedUsers: {
-            nodes: {
-              id: true,
-              name: true,
-            },
+          account: {
+            id: true,
+            name: true,
           },
         },
       },
@@ -195,7 +191,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
           name: true,
           type: true,
           status: true,
-          total: true,
+          price: true,
           createdAt: true,
         },
       },
@@ -204,7 +200,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
           id: true,
           message: true,
           createdAt: true,
-          createdBy: {
+          account: {
             id: true,
             name: true,
           },
@@ -241,14 +237,12 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
         nodes: {
           id: true,
           name: true,
-          status: true,
+          isToDo: true,
           startDate: true,
           endDate: true,
-          assignedUsers: {
-            nodes: {
-              id: true,
-              name: true,
-            },
+          account: {
+            id: true,
+            name: true,
           },
         },
       },
@@ -270,7 +264,7 @@ export async function getJobDocuments(jobId: string): Promise<Document[]> {
           name: true,
           type: true,
           status: true,
-          total: true,
+          price: true,
           createdAt: true,
         },
       },
@@ -290,7 +284,7 @@ export async function getJobComments(jobId: string): Promise<Comment[]> {
           id: true,
           message: true,
           createdAt: true,
-          createdBy: {
+          account: {
             id: true,
             name: true,
           },
@@ -312,7 +306,7 @@ export async function createComment(jobId: string, message: string): Promise<Com
       id: true,
       message: true,
       createdAt: true,
-      createdBy: {
+      account: {
         id: true,
         name: true,
       },
@@ -348,14 +342,12 @@ export async function updateTask(taskId: string, input: UpdateTaskInput): Promis
       $: { input: { id: taskId, ...input } },
       id: true,
       name: true,
-      status: true,
+      isToDo: true,
       startDate: true,
       endDate: true,
-      assignedUsers: {
-        nodes: {
-          id: true,
-          name: true,
-        },
+      account: {
+        id: true,
+        name: true,
       },
     },
   })
@@ -369,14 +361,12 @@ export async function createTask(jobId: string, input: CreateTaskInput): Promise
       $: { input: { jobId, ...input } },
       id: true,
       name: true,
-      status: true,
+      isToDo: true,
       startDate: true,
       endDate: true,
-      assignedUsers: {
-        nodes: {
-          id: true,
-          name: true,
-        },
+      account: {
+        id: true,
+        name: true,
       },
     },
   })
