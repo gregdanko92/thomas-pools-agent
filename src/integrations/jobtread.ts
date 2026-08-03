@@ -138,46 +138,45 @@ export interface ListJobsOptions {
 
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   const { search, statuses } = options
+  const whereValue = search ? `%${search}%` : '%'
 
-  // Pave API does not support filtering jobs by `status` in the where clause,
-  // and numeric pagination params are rejected. A `where` filter with `%` returns
-  // all matching records without a default page cap, so we always provide one.
-  const where = search ? `%${search}%` : '%'
-  const dollarParams = { where: ['name', 'like', where] }
+  const allJobs: Job[] = []
+  let cursor: string | null = null
 
-  const jobsParam: Record<string, unknown> = {
-    $: dollarParams,
-    nodes: {
-      id: true,
-      name: true,
-      status: true,
-      createdAt: true,
-      closedOn: true,
-      location: {
+  // Pave API hard-limits results to ~10 per page. Paginate via Relay cursor until done.
+  for (;;) {
+    const dollarParams: Record<string, unknown> = { where: ['name', 'like', whereValue] }
+    if (cursor) dollarParams.after = cursor
+
+    const jobsParam: Record<string, unknown> = {
+      $: dollarParams,
+      pageInfo: { hasNextPage: true, endCursor: true },
+      nodes: {
         id: true,
         name: true,
-        address: true,
+        status: true,
+        createdAt: true,
+        closedOn: true,
+        location: { id: true, name: true, address: true },
       },
-    },
+    }
+
+    const data = await pave({
+      organization: { $: { id: orgId() }, jobs: jobsParam },
+    })
+
+    const org = data.organization as Record<string, unknown> | null
+    if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
+
+    const jobsResult = org.jobs as { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Job[] }
+    allJobs.push(...jobsResult.nodes)
+
+    if (!jobsResult.pageInfo.hasNextPage) break
+    cursor = jobsResult.pageInfo.endCursor
   }
 
-  const data = await pave({
-    organization: {
-      $: { id: orgId() },
-      jobs: jobsParam,
-    },
-  })
-
-  const org = data.organization as Record<string, unknown> | null
-  if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
-  const allJobs = (org.jobs as { nodes: Job[] }).nodes
-
-  console.log(`[jobtread] listJobs fetched ${allJobs.length} total jobs`)
-
   if (statuses?.length) {
-    const filtered = allJobs.filter(j => statuses.includes(j.status))
-    console.log(`[jobtread] listJobs filtered to ${filtered.length} jobs with statuses: ${statuses.join(', ')}`)
-    return filtered
+    return allJobs.filter(j => statuses.includes(j.status))
   }
   return allJobs
 }
