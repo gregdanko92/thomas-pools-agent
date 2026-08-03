@@ -95,14 +95,17 @@ export interface CreateTaskInput {
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   const body = JSON.stringify({ grantKey: grantKey(), query })
+  console.log('[jobtread] pave request body length:', body.length, 'grantKey prefix:', grantKey().slice(0, 6), 'orgId:', orgId())
   const res = await fetch(PAVE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
   })
+  console.log('[jobtread] pave response status:', res.status)
 
   if (!res.ok) {
     const text = await res.text().catch(() => '')
+    console.log('[jobtread] pave error body:', text)
     throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText} — ${text}`)
   }
 
