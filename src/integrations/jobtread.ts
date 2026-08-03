@@ -131,7 +131,25 @@ function mapTask(t: Record<string, unknown>): Task {
 
 // --- Query helpers ---
 
-export async function listJobs(search?: string): Promise<Job[]> {
+export interface ListJobsOptions {
+  search?: string
+  statuses?: string[]
+}
+
+export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
+  const { search, statuses } = options
+
+  let where: unknown
+  if (search && statuses?.length) {
+    where = { and: [['name', 'like', `%${search}%`], { or: statuses.map(s => ['status', '=', s]) }] }
+  } else if (search) {
+    where = ['name', 'like', `%${search}%`]
+  } else if (statuses?.length) {
+    where = statuses.length === 1
+      ? ['status', '=', statuses[0]]
+      : { or: statuses.map(s => ['status', '=', s]) }
+  }
+
   const jobsParam: Record<string, unknown> = {
     nodes: {
       id: true,
@@ -146,8 +164,8 @@ export async function listJobs(search?: string): Promise<Job[]> {
       },
     },
   }
-  if (search) {
-    jobsParam.$ = { where: ['name', 'like', `%${search}%`] }
+  if (where !== undefined) {
+    jobsParam.$ = { where }
   }
 
   const data = await pave({

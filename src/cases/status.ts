@@ -67,7 +67,7 @@ function buildPrompt(job: JobDetail): string {
 }
 
 export async function runStatusCase(jobName: string): Promise<string> {
-  const matches = await listJobs(jobName)
+  const matches = await listJobs({ search: jobName })
 
   if (matches.length === 0) {
     return `No job found matching "${jobName}". Check the job name and try again.`
