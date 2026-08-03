@@ -93,7 +93,7 @@ export interface CreateTaskInput {
 // --- Core ---
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const body = JSON.stringify({ grantKey: grantKey(), query })
+  const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
   const res = await fetch(PAVE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
