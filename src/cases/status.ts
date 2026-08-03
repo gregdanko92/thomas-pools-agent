@@ -91,7 +91,7 @@ export async function runStatusCase(jobName: string): Promise<string> {
 }
 
 export function registerStatusCommand(): void {
-  registerSlashCommand('/status', async ({ command, ack, respond }) => {
+  registerSlashCommand('/jobstatus', async ({ command, ack, respond }) => {
     await ack()
     const jobName = command.text.trim()
     if (!jobName) {
