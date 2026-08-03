@@ -14,6 +14,11 @@ function orgId(): string {
 
 // --- Types ---
 
+export interface JobCustomer {
+  id: string
+  name: string
+}
+
 export interface Job {
   id: string
   name: string
@@ -21,6 +26,7 @@ export interface Job {
   createdAt: string | null
   closedOn: string | null
   location: JobLocation | null
+  customer: JobCustomer | null
 }
 
 export interface JobLocation {
@@ -151,6 +157,7 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
       createdAt: true,
       closedOn: true,
       location: { id: true, name: true, address: true },
+      customer: { id: true, name: true },
     },
   }
   const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
@@ -185,6 +192,7 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
       nodes: {
         id: true, name: true, status: true, createdAt: true, closedOn: true,
         location: { id: true, name: true, address: true },
+        customer: { id: true, name: true },
       },
     }
     const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
@@ -214,6 +222,10 @@ export async function getJob(jobId: string): Promise<JobDetail> {
         id: true,
         name: true,
         address: true,
+      },
+      customer: {
+        id: true,
+        name: true,
       },
       tasks: {
         nodes: {
@@ -266,6 +278,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
     createdAt: (raw.createdAt as string | null) ?? null,
     closedOn: (raw.closedOn as string | null) ?? null,
     location: (raw.location as JobLocation | null) ?? null,
+    customer: (raw.customer as JobCustomer | null) ?? null,
     tasks,
     documents,
     comments,
