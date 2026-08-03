@@ -6,14 +6,16 @@ import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 
 const ACTIVE_STATUSES = ['created', 'pending', 'approved']
-const MAX_DETAIL_JOBS = 15
 const TZ = 'America/Los_Angeles'
 
 const SYSTEM_PROMPT = `You are a morning briefing assistant for Thomas Pools, a pool construction company.
-Write a concise daily health check for the project management team. Plain text only, no markdown headers or bullet symbols.
-For each job, note its status, any pending documents awaiting customer action, recent customer comments, and what needs attention today.
-If a job has no activity or tasks, say so briefly. Flag anything urgent.
-Keep the entire summary under 500 words. End with a one-line count: "Active jobs reviewed: N".`
+You will receive data for all active jobs. Your job is to identify which ones need attention TODAY and summarize only those.
+Plain text only, no markdown headers or bullet symbols.
+
+Focus on jobs that have: pending documents awaiting customer action, denied documents needing follow-up, recent customer comments requiring a response, or jobs that have been open a long time with no activity.
+Skip jobs that are progressing normally with no blockers.
+For each flagged job, state why it needs attention and what the recommended action is.
+Keep the entire summary under 600 words. End with two lines: "Jobs needing attention: N" and "Total active jobs: M".`
 
 function buildPrompt(jobs: JobDetail[], totalActive: number): string {
   const headerDate = new Date().toLocaleDateString('en-US', {
@@ -23,7 +25,7 @@ function buildPrompt(jobs: JobDetail[], totalActive: number): string {
 
   const lines: string[] = [
     `Morning health check — ${headerDate}`,
-    `Showing ${jobs.length} of ${totalActive} active jobs.`,
+    `Total active jobs: ${totalActive}. Review all and flag only those needing attention today.`,
     '',
   ]
 
@@ -58,7 +60,7 @@ function buildPrompt(jobs: JobDetail[], totalActive: number): string {
     lines.push('')
   }
 
-  return `Generate a morning project health check from the following job data:\n\n${lines.join('\n')}`
+  return `Review all active jobs below and produce a focused morning briefing:\n\n${lines.join('\n')}`
 }
 
 export async function runMorningHealthCheck(): Promise<void> {
@@ -73,11 +75,9 @@ export async function runMorningHealthCheck(): Promise<void> {
 
     const activeJobs = await listJobs({ statuses: ACTIVE_STATUSES })
     totalActive = activeJobs.length
+    jobsReviewed = totalActive
 
-    const toFetch = activeJobs.slice(0, MAX_DETAIL_JOBS)
-    jobsReviewed = toFetch.length
-
-    const results = await Promise.allSettled(toFetch.map(j => getJob(j.id)))
+    const results = await Promise.allSettled(activeJobs.map(j => getJob(j.id)))
     const details = results
       .filter((r): r is PromiseFulfilledResult<JobDetail> => r.status === 'fulfilled')
       .map(r => r.value)
@@ -88,7 +88,6 @@ export async function runMorningHealthCheck(): Promise<void> {
 
     await postMessage(channel, summary)
 
-    // Audit logs are best-effort: don't let them mask a successful report delivery.
     await Promise.allSettled([
       supabase.from('daily_reports').insert({
         report_type: 'morning',
