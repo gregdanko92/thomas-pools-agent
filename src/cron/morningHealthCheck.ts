@@ -74,6 +74,9 @@ export async function runMorningHealthCheck(): Promise<void> {
     const activeJobs = await listJobs({ statuses: ACTIVE_STATUSES })
     totalActive = activeJobs.length
 
+    // Most recently created jobs first — alphabetical artifact of prefix queries otherwise.
+    activeJobs.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+
     const toFetch = activeJobs.slice(0, MAX_DETAIL_JOBS)
     jobsReviewed = toFetch.length
 
