@@ -12,6 +12,9 @@
     "type": "git",
     "url": "git+https://github.com/gregdanko92/thomas-pools-agent.git"
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
