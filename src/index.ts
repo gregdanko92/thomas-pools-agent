@@ -41,13 +41,14 @@ server.get('/debug/job-fields', async (_req, reply) => {
     return { ok: res.ok, status: res.status, body: parsed }
   }
 
-  const [accountResult, contactResult, ownerResult] = await Promise.all([
-    tryField({ account: { id: true, name: true } }),
-    tryField({ contact: { id: true, name: true } }),
-    tryField({ owner: { id: true, name: true } }),
+  const [clientResult, contactsResult, locationNameResult, numberResult] = await Promise.all([
+    tryField({ client: { id: true, name: true } }),
+    tryField({ contacts: { nodes: { id: true, name: true } } }),
+    tryField({ number: true }),
+    tryField({ description: true }),
   ])
 
-  return reply.send({ jobId, jobName, account: accountResult, contact: contactResult, owner: ownerResult })
+  return reply.send({ jobId, jobName, client: clientResult, contacts: contactsResult, number: numberResult, description: locationNameResult })
 })
 
 const start = async () => {
