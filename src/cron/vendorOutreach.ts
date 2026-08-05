@@ -88,10 +88,13 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
     const candidates = await fetchCandidates()
     candidateCount = candidates.length
 
+    const testPhone = process.env.VENDOR_OUTREACH_TEST_PHONE
+
     for (const candidate of candidates) {
       const body = buildSmsBody(candidate)
+      const toPhone = testPhone ?? candidate.phone
       try {
-        const smsResult = await sendSms(candidate.phone, body)
+        const smsResult = await sendSms(toPhone, body)
 
         await supabase.from('outreach_log').insert({
           vendor_id: candidate.vendorId,
