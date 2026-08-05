@@ -97,7 +97,7 @@ export interface CreateTaskInput {
 function extractStage(raw: Record<string, unknown>): string | null {
   const cfv = raw.customFieldValues as { nodes: Array<{ value: string; customField: { id: string } }> } | undefined
   if (!cfv) return null
-  return cfv.nodes.find(n => n.customField.id === STAGE_FIELD_ID)?.value ?? null
+  return cfv.nodes.find(n => n.customField.id === STAGE_FIELD_ID)?.value || null
 }
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
