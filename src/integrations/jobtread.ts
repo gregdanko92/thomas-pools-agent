@@ -1,5 +1,8 @@
 const PAVE_URL = 'https://api.jobtread.com/pave'
 
+// Org-specific custom field that holds the pipeline stage (Sold, Excavation, Plaster, etc.)
+const STAGE_FIELD_ID = '22PAqEaW5wPt'
+
 function grantKey(): string {
   const key = process.env.JOBTREAD_GRANT_KEY?.trim()
   if (!key) throw new Error('JOBTREAD_GRANT_KEY is not set')
@@ -18,6 +21,7 @@ export interface Job {
   id: string
   name: string
   status: string
+  stage: string | null
   createdAt: string | null
   closedOn: string | null
   location: JobLocation | null
@@ -90,6 +94,12 @@ export interface CreateTaskInput {
 
 // --- Core ---
 
+function extractStage(raw: Record<string, unknown>): string | null {
+  const cfv = raw.customFieldValues as { nodes: Array<{ value: string; customField: { id: string } }> } | undefined
+  if (!cfv) return null
+  return cfv.nodes.find(n => n.customField.id === STAGE_FIELD_ID)?.value ?? null
+}
+
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
   const res = await fetch(PAVE_URL, {
@@ -134,6 +144,7 @@ function mapTask(t: Record<string, unknown>): Task {
 export interface ListJobsOptions {
   search?: string
   statuses?: string[]
+  stages?: string[]
 }
 
 // Pave API returns ~10 results per page with no pagination metadata.
@@ -151,12 +162,16 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
       createdAt: true,
       closedOn: true,
       location: { id: true, name: true, address: true },
+      customFieldValues: {
+        nodes: { value: true, customField: { id: true } },
+      },
     },
   }
   const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
   const org = data.organization as Record<string, unknown> | null
   if (!org) return []
-  return ((org.jobs as { nodes: Job[] }).nodes) ?? []
+  const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+  return rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
 }
 
 async function listAllJobs(): Promise<Job[]> {
@@ -176,7 +191,7 @@ async function listAllJobs(): Promise<Job[]> {
 }
 
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
-  const { search, statuses } = options
+  const { search, statuses, stages } = options
 
   let allJobs: Job[]
   if (search) {
@@ -185,18 +200,25 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
       nodes: {
         id: true, name: true, status: true, createdAt: true, closedOn: true,
         location: { id: true, name: true, address: true },
+        customFieldValues: {
+          nodes: { value: true, customField: { id: true } },
+        },
       },
     }
     const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
     const org = data.organization as Record<string, unknown> | null
     if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
-    allJobs = ((org.jobs as { nodes: Job[] }).nodes) ?? []
+    const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+    allJobs = rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
   } else {
     allJobs = await listAllJobs()
   }
 
   if (statuses?.length) {
-    return allJobs.filter(j => statuses.includes(j.status))
+    allJobs = allJobs.filter(j => statuses.includes(j.status))
+  }
+  if (stages?.length) {
+    allJobs = allJobs.filter(j => j.stage !== null && stages.includes(j.stage))
   }
   return allJobs
 }
@@ -214,6 +236,9 @@ export async function getJob(jobId: string): Promise<JobDetail> {
         id: true,
         name: true,
         address: true,
+      },
+      customFieldValues: {
+        nodes: { value: true, customField: { id: true } },
       },
       tasks: {
         nodes: {
@@ -263,6 +288,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
     id: raw.id as string,
     name: raw.name as string,
     status: raw.status as string,
+    stage: extractStage(raw),
     createdAt: (raw.createdAt as string | null) ?? null,
     closedOn: (raw.closedOn as string | null) ?? null,
     location: (raw.location as JobLocation | null) ?? null,
