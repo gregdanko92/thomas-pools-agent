@@ -147,10 +147,17 @@ export interface ListJobsOptions {
   stages?: string[]
 }
 
-// Pave API returns ~10 results per page with no pagination metadata.
-// Bypass by issuing one query per leading character (A-Z, 0-9) in parallel
-// and deduplicating by ID. Each bucket has far fewer than 10 jobs in practice.
-const PREFIXES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('')
+// Pave API returns at most 10 results per query with no cursor/pagination support.
+// Strategy: query one prefix at a time (A-Z, 0-9). If a bucket returns exactly 10
+// (the cap), it may be truncated — recurse into two-character sub-prefixes to
+// recover the overflow. Dedup by ID across all results.
+// Includes lowercase so sub-prefix expansion catches mixed-case names (e.g. title-case "Smith" → "Sm%")
+const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.split('')
+
+// "Job N" placeholder names need separate treatment — space breaks the CHARS expansion.
+// "Job 1%".."Job 9%" covers Job 1–9 and all multi-digit job numbers (Job 10, Job 104, etc.)
+const JOB_N_PREFIXES = '0123456789'.split('').map(d => `Job ${d}`)
+const PAVE_PAGE_SIZE = 10
 
 async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
   const jobsParam: Record<string, unknown> = {
@@ -174,8 +181,23 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
   return rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
 }
 
+async function expandPrefix(prefix: string): Promise<Job[]> {
+  const batch = await fetchJobsWithPrefix(prefix)
+  if (batch.length < PAVE_PAGE_SIZE) return batch
+  // Bucket hit the cap — expand into sub-prefixes to recover truncated results
+  const subBatches = await Promise.allSettled(CHARS.map(c => expandPrefix(prefix + c)))
+  const all = [...batch]
+  for (const r of subBatches) {
+    if (r.status === 'fulfilled') all.push(...r.value)
+  }
+  return all
+}
+
 async function listAllJobs(): Promise<Job[]> {
-  const batches = await Promise.allSettled(PREFIXES.map(fetchJobsWithPrefix))
+  const batches = await Promise.allSettled([
+    ...CHARS.map(expandPrefix),
+    ...JOB_N_PREFIXES.map(expandPrefix),
+  ])
   const seen = new Set<string>()
   const all: Job[] = []
   for (const result of batches) {
