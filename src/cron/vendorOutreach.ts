@@ -4,8 +4,8 @@ import { supabase } from '../db/client'
 
 const TZ = 'America/Los_Angeles'
 
-// Vendors who haven't been contacted in this many days are due for outreach.
-const OUTREACH_INTERVAL_DAYS = 3
+// C7: respect env override so this can be tuned per-environment without a deploy
+const OUTREACH_INTERVAL_DAYS = Number(process.env.VENDOR_OUTREACH_INTERVAL_DAYS) || 3
 
 export interface OutreachCandidate {
   vendorId: string
@@ -13,7 +13,7 @@ export interface OutreachCandidate {
   phone: string
   trade: string | null
   jobtreadJobId: string
-  jobtreadJobName: string
+  jobtreadJobName: string | null  // C4: nullable — Supabase column is nullable
 }
 
 export interface OutreachResult {
@@ -26,9 +26,10 @@ export interface OutreachResult {
 
 function buildSmsBody(candidate: OutreachCandidate): string {
   const trade = candidate.trade ? ` (${candidate.trade})` : ''
+  const jobRef = candidate.jobtreadJobName ?? candidate.jobtreadJobId  // C4: fallback to ID
   return (
     `Hi ${candidate.vendorName}${trade} — this is a check-in from Thomas Pools regarding ` +
-    `the ${candidate.jobtreadJobName} project. Can you share a quick status update? Reply to this message.`
+    `the ${jobRef} project. Can you share a quick status update? Reply to this message.`
   )
 }
 
@@ -42,29 +43,37 @@ async function fetchCandidates(): Promise<OutreachCandidate[]> {
   if (vendorErr) throw new Error(`Failed to fetch vendors: ${vendorErr.message}`)
   if (!vendors || vendors.length === 0) return []
 
-  const cutoff = new Date(Date.now() - OUTREACH_INTERVAL_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  // C6: single query for all recent log entries instead of N+1 per-vendor queries
+  const vendorIds = vendors.map(v => v.id)
+  const { data: recentLogs, error: logErr } = await supabase
+    .from('outreach_log')
+    .select('vendor_id, sent_at, status')
+    .in('vendor_id', vendorIds)
+    .order('sent_at', { ascending: false })
 
+  if (logErr) throw new Error(`Failed to fetch outreach logs: ${logErr.message}`)
+
+  // Results are ordered desc — first hit per vendor_id is the most recent entry
+  const lastLogByVendor = new Map<string, { sent_at: string; status: string }>()
+  for (const log of recentLogs ?? []) {
+    if (!lastLogByVendor.has(log.vendor_id)) {
+      lastLogByVendor.set(log.vendor_id, { sent_at: log.sent_at, status: log.status })
+    }
+  }
+
+  const cutoff = new Date(Date.now() - OUTREACH_INTERVAL_DAYS * 24 * 60 * 60 * 1000).toISOString()
   const candidates: OutreachCandidate[] = []
 
   for (const vendor of vendors) {
-    // Find the most recent outreach log entry for this vendor that is in a
-    // terminal/active state — sent, replied, or escalated all count as "contacted".
-    const { data: recent, error: logErr } = await supabase
-      .from('outreach_log')
-      .select('sent_at, status')
-      .eq('vendor_id', vendor.id)
-      .order('sent_at', { ascending: false })
-      .limit(1)
+    const lastEntry = lastLogByVendor.get(vendor.id)
 
-    if (logErr) {
-      console.error(`[vendor-outreach] Failed to query log for vendor ${vendor.id}:`, logErr.message)
-      continue
+    if (lastEntry) {
+      // C2: active conversation — vendor replied or was escalated, don't outreach again
+      if (lastEntry.status === 'replied' || lastEntry.status === 'escalated') continue
+      // C3: failed entries fall through so the next run retries the SMS
+      // sent/followed_up entries within the interval are handled by Task 17's follow-up cron
+      if (lastEntry.status !== 'failed' && lastEntry.sent_at > cutoff) continue
     }
-
-    const lastEntry = recent?.[0]
-
-    // Skip vendors who received outreach recently and haven't had time to respond.
-    if (lastEntry && lastEntry.sent_at > cutoff) continue
 
     candidates.push({
       vendorId: vendor.id,
@@ -72,14 +81,23 @@ async function fetchCandidates(): Promise<OutreachCandidate[]> {
       phone: vendor.phone,
       trade: vendor.trade ?? null,
       jobtreadJobId: vendor.jobtread_job_id,
-      jobtreadJobName: vendor.jobtread_job_name,
+      jobtreadJobName: vendor.jobtread_job_name ?? null,
     })
   }
 
   return candidates
 }
 
+// C5: in-process lock so a manual HTTP trigger can't race the scheduled cron
+let isRunning = false
+
 export async function runVendorOutreach(): Promise<OutreachResult[]> {
+  if (isRunning) {
+    console.warn('[vendor-outreach] Already running — skipping concurrent trigger')
+    return []
+  }
+  isRunning = true
+
   const results: OutreachResult[] = []
   let candidateCount = 0
   let sentCount = 0
@@ -96,13 +114,21 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
       try {
         const smsResult = await sendSms(toPhone, body)
 
-        await supabase.from('outreach_log').insert({
-          vendor_id: candidate.vendorId,
-          jobtread_job_id: candidate.jobtreadJobId,
-          message_sent: body,
-          status: 'sent',
-          twilio_message_sid: smsResult.sid,
-        })
+        // C1: separate try/catch so a log insert failure doesn't mark a delivered SMS as 'failed'
+        try {
+          await supabase.from('outreach_log').insert({
+            vendor_id: candidate.vendorId,
+            jobtread_job_id: candidate.jobtreadJobId,
+            message_sent: body,
+            status: 'sent',
+            twilio_message_sid: smsResult.sid,
+          })
+        } catch (insertErr) {
+          console.error(
+            `[vendor-outreach] Log insert failed for ${candidate.vendorName} (SMS was delivered):`,
+            insertErr instanceof Error ? insertErr.message : insertErr,
+          )
+        }
 
         results.push({ vendorId: candidate.vendorId, vendorName: candidate.vendorName, sent: true, twilioSid: smsResult.sid })
         sentCount++
@@ -138,6 +164,8 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
     }).then(() => undefined, () => undefined)
 
     throw err
+  } finally {
+    isRunning = false
   }
 
   return results
