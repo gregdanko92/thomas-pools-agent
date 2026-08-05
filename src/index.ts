@@ -4,6 +4,7 @@ import { startSlackApp } from './integrations/slack'
 import { registerStatusCommand } from './cases/status'
 import { startMorningHealthCheck, runMorningHealthCheck } from './cron/morningHealthCheck'
 import { startEveningReport, runEveningReport } from './cron/eveningReport'
+import { startVendorFollowUp } from './cron/vendorFollowUp'
 
 const server = Fastify({ logger: true })
 
@@ -38,6 +39,7 @@ const start = async () => {
     registerStatusCommand()
     startMorningHealthCheck()
     startEveningReport()
+    startVendorFollowUp()
     const port = Number(process.env.PORT) || 3000
     await server.listen({ port, host: '0.0.0.0' })
     await startSlackApp()
