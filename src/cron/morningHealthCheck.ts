@@ -5,7 +5,11 @@ import { postMessage } from '../integrations/slack'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 
-const ACTIVE_STATUSES = ['created', 'pending', 'approved']
+const ACTIVE_STAGES = [
+  'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
+  'Plumbing / Electric', 'Gunnite', 'Coping / Tile',
+  'Hardscape / Landscape', 'Fence & Gate', 'Plaster',
+]
 const TZ = 'America/Los_Angeles'
 
 const SYSTEM_PROMPT = `You are a morning briefing assistant for Thomas Pools, a pool construction company.
@@ -34,7 +38,7 @@ function buildPrompt(jobs: JobDetail[], totalActive: number): string {
       ? `${job.name} — ${job.location.address}`
       : job.name
     lines.push(`JOB: ${name}`)
-    lines.push(`Status: ${job.status} | Created: ${(job.createdAt ?? '').slice(0, 10) || 'unknown'}`)
+    lines.push(`Stage: ${job.stage ?? job.status} | Created: ${(job.createdAt ?? '').slice(0, 10) || 'unknown'}`)
     if (job.location?.address) lines.push(`Location: ${job.location.address}`)
 
     if (job.tasks.length === 0) {
@@ -76,7 +80,7 @@ export async function runMorningHealthCheck(): Promise<void> {
     if (!id) throw new Error('SLACK_MORNING_CHANNEL is not set')
     channel = id
 
-    const activeJobs = await listJobs({ statuses: ACTIVE_STATUSES })
+    const activeJobs = await listJobs({ stages: ACTIVE_STAGES })
     totalActive = activeJobs.length
     jobsReviewed = totalActive
 

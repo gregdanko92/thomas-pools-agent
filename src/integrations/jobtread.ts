@@ -1,5 +1,8 @@
 const PAVE_URL = 'https://api.jobtread.com/pave'
 
+// Org-specific custom field that holds the pipeline stage (Sold, Excavation, Plaster, etc.)
+const STAGE_FIELD_ID = '22PAqEaW5wPt'
+
 function grantKey(): string {
   const key = process.env.JOBTREAD_GRANT_KEY?.trim()
   if (!key) throw new Error('JOBTREAD_GRANT_KEY is not set')
@@ -18,6 +21,7 @@ export interface Job {
   id: string
   name: string
   status: string
+  stage: string | null
   createdAt: string | null
   closedOn: string | null
   location: JobLocation | null
@@ -90,6 +94,12 @@ export interface CreateTaskInput {
 
 // --- Core ---
 
+function extractStage(raw: Record<string, unknown>): string | null {
+  const cfv = raw.customFieldValues as { nodes: Array<{ value: string; customField: { id: string } }> } | undefined
+  if (!cfv) return null
+  return cfv.nodes.find(n => n.customField.id === STAGE_FIELD_ID)?.value ?? null
+}
+
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
   const res = await fetch(PAVE_URL, {
@@ -134,12 +144,20 @@ function mapTask(t: Record<string, unknown>): Task {
 export interface ListJobsOptions {
   search?: string
   statuses?: string[]
+  stages?: string[]
 }
 
-// Pave API returns ~10 results per page with no pagination metadata.
-// Bypass by issuing one query per leading character (A-Z, 0-9) in parallel
-// and deduplicating by ID. Each bucket has far fewer than 10 jobs in practice.
-const PREFIXES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('')
+// Pave API returns at most 10 results per query with no cursor/pagination support.
+// Strategy: query one prefix at a time (A-Z, 0-9). If a bucket returns exactly 10
+// (the cap), it may be truncated — recurse into two-character sub-prefixes to
+// recover the overflow. Dedup by ID across all results.
+// Includes lowercase so sub-prefix expansion catches mixed-case names (e.g. title-case "Smith" → "Sm%")
+const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.split('')
+
+// "Job N" placeholder names need separate treatment — space breaks the CHARS expansion.
+// "Job 1%".."Job 9%" covers Job 1–9 and all multi-digit job numbers (Job 10, Job 104, etc.)
+const JOB_N_PREFIXES = '0123456789'.split('').map(d => `Job ${d}`)
+const PAVE_PAGE_SIZE = 10
 
 async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
   const jobsParam: Record<string, unknown> = {
@@ -151,16 +169,35 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
       createdAt: true,
       closedOn: true,
       location: { id: true, name: true, address: true },
+      customFieldValues: {
+        nodes: { value: true, customField: { id: true } },
+      },
     },
   }
   const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
   const org = data.organization as Record<string, unknown> | null
   if (!org) return []
-  return ((org.jobs as { nodes: Job[] }).nodes) ?? []
+  const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+  return rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
+}
+
+async function expandPrefix(prefix: string): Promise<Job[]> {
+  const batch = await fetchJobsWithPrefix(prefix)
+  if (batch.length < PAVE_PAGE_SIZE) return batch
+  // Bucket hit the cap — expand into sub-prefixes to recover truncated results
+  const subBatches = await Promise.allSettled(CHARS.map(c => expandPrefix(prefix + c)))
+  const all = [...batch]
+  for (const r of subBatches) {
+    if (r.status === 'fulfilled') all.push(...r.value)
+  }
+  return all
 }
 
 async function listAllJobs(): Promise<Job[]> {
-  const batches = await Promise.allSettled(PREFIXES.map(fetchJobsWithPrefix))
+  const batches = await Promise.allSettled([
+    ...CHARS.map(expandPrefix),
+    ...JOB_N_PREFIXES.map(expandPrefix),
+  ])
   const seen = new Set<string>()
   const all: Job[] = []
   for (const result of batches) {
@@ -176,7 +213,7 @@ async function listAllJobs(): Promise<Job[]> {
 }
 
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
-  const { search, statuses } = options
+  const { search, statuses, stages } = options
 
   let allJobs: Job[]
   if (search) {
@@ -185,18 +222,25 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
       nodes: {
         id: true, name: true, status: true, createdAt: true, closedOn: true,
         location: { id: true, name: true, address: true },
+        customFieldValues: {
+          nodes: { value: true, customField: { id: true } },
+        },
       },
     }
     const data = await pave({ organization: { $: { id: orgId() }, jobs: jobsParam } })
     const org = data.organization as Record<string, unknown> | null
     if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
-    allJobs = ((org.jobs as { nodes: Job[] }).nodes) ?? []
+    const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+    allJobs = rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
   } else {
     allJobs = await listAllJobs()
   }
 
   if (statuses?.length) {
-    return allJobs.filter(j => statuses.includes(j.status))
+    allJobs = allJobs.filter(j => statuses.includes(j.status))
+  }
+  if (stages?.length) {
+    allJobs = allJobs.filter(j => j.stage !== null && stages.includes(j.stage))
   }
   return allJobs
 }
@@ -214,6 +258,9 @@ export async function getJob(jobId: string): Promise<JobDetail> {
         id: true,
         name: true,
         address: true,
+      },
+      customFieldValues: {
+        nodes: { value: true, customField: { id: true } },
       },
       tasks: {
         nodes: {
@@ -263,6 +310,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
     id: raw.id as string,
     name: raw.name as string,
     status: raw.status as string,
+    stage: extractStage(raw),
     createdAt: (raw.createdAt as string | null) ?? null,
     closedOn: (raw.closedOn as string | null) ?? null,
     location: (raw.location as JobLocation | null) ?? null,
