@@ -61,6 +61,19 @@ create table agent_run_log (
   created_at timestamptz not null default now()
 );
 
+-- 7. Tracks which Jobtread tasks have been synced to Google Calendar
+create table calendar_sync (
+  id uuid primary key default gen_random_uuid(),
+  jobtread_task_id text not null unique,
+  jobtread_job_id text not null,
+  google_event_id text not null,
+  task_name text not null,
+  task_start text,
+  task_end text,
+  last_synced_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
 -- 6. Archive of all daily reports sent
 create table daily_reports (
   id uuid primary key default gen_random_uuid(),
