@@ -90,6 +90,9 @@ export async function runCalendarSync(): Promise<CalendarSyncResult> {
     for (const task of tasks) {
       if (!task.startDate) continue
 
+      // Google Calendar API default quota is ~10 req/s; 200ms spacing keeps us under it.
+      await new Promise(r => setTimeout(r, 200))
+
       const title = `${displayName} — ${task.name}`
       const end = resolveEnd(task)
       const existing = syncMap.get(task.id)
