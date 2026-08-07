@@ -4,6 +4,7 @@ import type { JobDetail } from '../integrations/jobtread'
 import { postMessage } from '../integrations/slack'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
+import { postErrorAlert } from '../lib/errorAlert'
 
 const ACTIVE_STAGES = [
   'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
@@ -122,8 +123,9 @@ export async function runMorningHealthCheck(): Promise<void> {
 // Fires daily at 7 AM America/Los_Angeles — construction crews work weekends.
 export function startMorningHealthCheck(): void {
   cron.schedule('0 7 * * *', () => {
-    runMorningHealthCheck().catch(err =>
-      console.error('[morning-health-check]', err instanceof Error ? err.message : err),
-    )
+    runMorningHealthCheck().catch(async err => {
+      console.error('[morning-health-check]', err instanceof Error ? err.message : err)
+      await postErrorAlert('morning-health-check', err)
+    })
   }, { timezone: TZ })
 }
