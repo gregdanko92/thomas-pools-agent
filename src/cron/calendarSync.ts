@@ -3,6 +3,7 @@ import { listJobs, getJobTasks } from '../integrations/jobtread'
 import type { Job, Task } from '../integrations/jobtread'
 import { createEvent, updateEvent } from '../integrations/googleCalendar'
 import { supabase } from '../db/client'
+import { postErrorAlert } from '../lib/errorAlert'
 
 const TZ = 'America/Los_Angeles'
 
@@ -170,8 +171,9 @@ export function startCalendarSync(): void {
       if (r.created > 0 || r.updated > 0 || r.errors > 0) {
         console.log(`[calendar-sync] created=${r.created} updated=${r.updated} errors=${r.errors}`)
       }
-    }).catch(err =>
-      console.error('[calendar-sync]', err instanceof Error ? err.message : err),
-    )
+    }).catch(async err => {
+      console.error('[calendar-sync]', err instanceof Error ? err.message : err)
+      await postErrorAlert('calendar-sync', err)
+    })
   }, { timezone: TZ })
 }
