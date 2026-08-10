@@ -7,6 +7,7 @@ import { startEveningReport, runEveningReport } from './cron/eveningReport'
 import { startVendorOutreach, runVendorOutreach } from './cron/vendorOutreach'
 import { startCalendarSync, runCalendarSync } from './cron/calendarSync'
 import { startPaymentReminders, runPaymentReminders } from './cron/paymentReminders'
+import { postErrorAlert } from './lib/errorAlert'
 
 const server = Fastify({ logger: true })
 
@@ -19,9 +20,10 @@ server.post('/cron/morning', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runMorningHealthCheck().catch(err =>
-    server.log.error({ err }, 'manual morning health check failed'),
-  )
+  runMorningHealthCheck().catch(async err => {
+    server.log.error({ err }, 'manual morning health check failed')
+    await postErrorAlert('morning-health-check:manual', err)
+  })
   return reply.status(202).send({ triggered: true })
 })
 
@@ -30,9 +32,10 @@ server.post('/cron/evening', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runEveningReport().catch(err =>
-    server.log.error({ err }, 'manual evening report failed'),
-  )
+  runEveningReport().catch(async err => {
+    server.log.error({ err }, 'manual evening report failed')
+    await postErrorAlert('evening-report:manual', err)
+  })
   return reply.status(202).send({ triggered: true })
 })
 
@@ -41,9 +44,10 @@ server.post('/cron/vendor-outreach', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runVendorOutreach().catch(err =>
-    server.log.error({ err }, 'manual vendor outreach failed'),
-  )
+  runVendorOutreach().catch(async err => {
+    server.log.error({ err }, 'manual vendor outreach failed')
+    await postErrorAlert('vendor-outreach:manual', err)
+  })
   return reply.status(202).send({ triggered: true })
 })
 
@@ -52,9 +56,10 @@ server.post('/cron/calendar-sync', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runCalendarSync().catch(err =>
-    server.log.error({ err }, 'manual calendar sync failed'),
-  )
+  runCalendarSync().catch(async err => {
+    server.log.error({ err }, 'manual calendar sync failed')
+    await postErrorAlert('calendar-sync:manual', err)
+  })
   return reply.status(202).send({ triggered: true })
 })
 
@@ -63,9 +68,10 @@ server.post('/cron/payment-reminders', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runPaymentReminders().catch(err =>
-    server.log.error({ err }, 'manual payment reminders failed'),
-  )
+  runPaymentReminders().catch(async err => {
+    server.log.error({ err }, 'manual payment reminders failed')
+    await postErrorAlert('payment-reminders:manual', err)
+  })
   return reply.status(202).send({ triggered: true })
 })
 

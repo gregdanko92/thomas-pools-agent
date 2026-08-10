@@ -3,6 +3,7 @@ import { getJobDocuments } from '../integrations/jobtread'
 import type { Document } from '../integrations/jobtread'
 import { postMessage } from '../integrations/slack'
 import { supabase } from '../db/client'
+import { postErrorAlert } from '../lib/errorAlert'
 
 const TZ = 'America/Los_Angeles'
 
@@ -159,8 +160,9 @@ export async function runPaymentReminders(): Promise<PaymentReminderResult> {
 // Fires daily at 8 AM America/Los_Angeles — early enough for the team to act during business hours.
 export function startPaymentReminders(): void {
   cron.schedule('0 8 * * *', () => {
-    runPaymentReminders().catch(err =>
-      console.error('[payment-reminders]', err instanceof Error ? err.message : err),
-    )
+    runPaymentReminders().catch(async err => {
+      console.error('[payment-reminders]', err instanceof Error ? err.message : err)
+      await postErrorAlert('payment-reminders', err)
+    })
   }, { timezone: TZ })
 }

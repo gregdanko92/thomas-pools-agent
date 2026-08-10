@@ -1,6 +1,7 @@
 import cron from 'node-cron'
 import { sendSms } from '../integrations/twilio'
 import { supabase } from '../db/client'
+import { postErrorAlert } from '../lib/errorAlert'
 
 const TZ = 'America/Los_Angeles'
 
@@ -174,8 +175,9 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
 // Fires daily at 9 AM America/Los_Angeles — early enough to catch vendors before noon.
 export function startVendorOutreach(): void {
   cron.schedule('0 9 * * *', () => {
-    runVendorOutreach().catch(err =>
-      console.error('[vendor-outreach]', err instanceof Error ? err.message : err),
-    )
+    runVendorOutreach().catch(async err => {
+      console.error('[vendor-outreach]', err instanceof Error ? err.message : err)
+      await postErrorAlert('vendor-outreach', err)
+    })
   }, { timezone: TZ })
 }
