@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import { sendSms } from '../integrations/twilio'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
+import { withLock } from '../lib/cronLock'
 
 const TZ = 'America/Los_Angeles'
 
@@ -89,16 +90,7 @@ async function fetchCandidates(): Promise<OutreachCandidate[]> {
   return candidates
 }
 
-// C5: in-process lock so a manual HTTP trigger can't race the scheduled cron
-let isRunning = false
-
 export async function runVendorOutreach(): Promise<OutreachResult[]> {
-  if (isRunning) {
-    console.warn('[vendor-outreach] Already running — skipping concurrent trigger')
-    return []
-  }
-  isRunning = true
-
   const results: OutreachResult[] = []
   let candidateCount = 0
   let sentCount = 0
@@ -165,8 +157,6 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
     }).then(() => undefined, () => undefined)
 
     throw err
-  } finally {
-    isRunning = false
   }
 
   return results
@@ -175,7 +165,7 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
 // Fires daily at 9 AM America/Los_Angeles — early enough to catch vendors before noon.
 export function startVendorOutreach(): void {
   cron.schedule('0 9 * * *', () => {
-    runVendorOutreach().catch(async err => {
+    withLock('vendor-outreach', () => runVendorOutreach()).catch(async err => {
       console.error('[vendor-outreach]', err instanceof Error ? err.message : err)
       await postErrorAlert('vendor-outreach', err)
     })

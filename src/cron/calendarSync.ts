@@ -4,6 +4,7 @@ import type { Job, Task } from '../integrations/jobtread'
 import { createEvent, updateEvent } from '../integrations/googleCalendar'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
+import { withLock } from '../lib/cronLock'
 
 const TZ = 'America/Los_Angeles'
 
@@ -167,9 +168,9 @@ export async function runCalendarSync(): Promise<CalendarSyncResult> {
 // Fires hourly — frequent enough to catch new Jobtread tasks within the hour they're added.
 export function startCalendarSync(): void {
   cron.schedule('0 * * * *', () => {
-    runCalendarSync().then(r => {
-      if (r.created > 0 || r.updated > 0 || r.errors > 0) {
-        console.log(`[calendar-sync] created=${r.created} updated=${r.updated} errors=${r.errors}`)
+    withLock('calendar-sync', () => runCalendarSync()).then(result => {
+      if (result && (result.created > 0 || result.updated > 0 || result.errors > 0)) {
+        console.log(`[calendar-sync] created=${result.created} updated=${result.updated} errors=${result.errors}`)
       }
     }).catch(async err => {
       console.error('[calendar-sync]', err instanceof Error ? err.message : err)

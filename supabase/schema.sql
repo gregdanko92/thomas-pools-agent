@@ -74,6 +74,13 @@ create table calendar_sync (
   created_at timestamptz not null default now()
 );
 
+-- 8. Distributed cron lock — prevents duplicate runs across Railway redeploys or concurrent triggers
+create table cron_locks (
+  lock_name text primary key,
+  acquired_at timestamptz not null,
+  released_at timestamptz
+);
+
 -- 6. Archive of all daily reports sent
 create table daily_reports (
   id uuid primary key default gen_random_uuid(),

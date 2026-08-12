@@ -8,6 +8,7 @@ import { startVendorOutreach, runVendorOutreach } from './cron/vendorOutreach'
 import { startCalendarSync, runCalendarSync } from './cron/calendarSync'
 import { startPaymentReminders, runPaymentReminders } from './cron/paymentReminders'
 import { postErrorAlert } from './lib/errorAlert'
+import { withLock } from './lib/cronLock'
 
 const server = Fastify({ logger: true })
 
@@ -20,7 +21,7 @@ server.post('/cron/morning', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runMorningHealthCheck().catch(async err => {
+  withLock('morning-health-check', () => runMorningHealthCheck()).catch(async err => {
     server.log.error({ err }, 'manual morning health check failed')
     await postErrorAlert('morning-health-check:manual', err)
   })
@@ -32,7 +33,7 @@ server.post('/cron/evening', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runEveningReport().catch(async err => {
+  withLock('evening-report', () => runEveningReport()).catch(async err => {
     server.log.error({ err }, 'manual evening report failed')
     await postErrorAlert('evening-report:manual', err)
   })
@@ -44,7 +45,7 @@ server.post('/cron/vendor-outreach', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runVendorOutreach().catch(async err => {
+  withLock('vendor-outreach', () => runVendorOutreach()).catch(async err => {
     server.log.error({ err }, 'manual vendor outreach failed')
     await postErrorAlert('vendor-outreach:manual', err)
   })
@@ -56,7 +57,7 @@ server.post('/cron/calendar-sync', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runCalendarSync().catch(async err => {
+  withLock('calendar-sync', () => runCalendarSync()).catch(async err => {
     server.log.error({ err }, 'manual calendar sync failed')
     await postErrorAlert('calendar-sync:manual', err)
   })
@@ -68,7 +69,7 @@ server.post('/cron/payment-reminders', async (req, reply) => {
   if (secret && req.headers['x-cron-secret'] !== secret) {
     return reply.status(401).send({ error: 'unauthorized' })
   }
-  runPaymentReminders().catch(async err => {
+  withLock('payment-reminders', () => runPaymentReminders()).catch(async err => {
     server.log.error({ err }, 'manual payment reminders failed')
     await postErrorAlert('payment-reminders:manual', err)
   })
