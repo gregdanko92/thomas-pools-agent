@@ -1,4 +1,5 @@
 import twilio from 'twilio'
+import { withRetry } from '../lib/retry'
 
 // --- Types ---
 
@@ -64,13 +65,15 @@ function getClient(): twilio.Twilio {
 // --- Outbound SMS ---
 
 export async function sendSms(to: string, body: string): Promise<SendSmsResult> {
-  const message = await getClient().messages.create({ body, from: fromNumber(), to })
-  return {
-    sid: message.sid,
-    status: message.status,
-    to: message.to,
-    from: message.from,
-  }
+  return withRetry(async () => {
+    const message = await getClient().messages.create({ body, from: fromNumber(), to })
+    return {
+      sid: message.sid,
+      status: message.status,
+      to: message.to,
+      from: message.from,
+    }
+  })
 }
 
 // --- Inbound webhook helpers ---

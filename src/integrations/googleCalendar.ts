@@ -1,5 +1,6 @@
 import { google } from 'googleapis'
 import type { calendar_v3 } from 'googleapis'
+import { withRetry } from '../lib/retry'
 
 // --- Types ---
 
@@ -103,51 +104,57 @@ function toGoogleDateTime(iso: string): calendar_v3.Schema$EventDateTime {
 // --- Exported helpers ---
 
 export async function createEvent(input: CreateEventInput): Promise<CalendarEvent> {
-  const res = await getClient().events.insert({
-    calendarId: calendarId(),
-    requestBody: {
-      summary: input.title,
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.location !== undefined ? { location: input.location } : {}),
-      start: toGoogleDateTime(input.start),
-      end: toGoogleDateTime(input.end),
-    },
+  return withRetry(async () => {
+    const res = await getClient().events.insert({
+      calendarId: calendarId(),
+      requestBody: {
+        summary: input.title,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.location !== undefined ? { location: input.location } : {}),
+        start: toGoogleDateTime(input.start),
+        end: toGoogleDateTime(input.end),
+      },
+    })
+    return mapEvent(res.data)
   })
-  return mapEvent(res.data)
 }
 
 export async function updateEvent(
   eventId: string,
   input: UpdateEventInput,
 ): Promise<CalendarEvent> {
-  const calId = calendarId()
-  const patch: calendar_v3.Schema$Event = {}
-  if (input.title !== undefined) patch.summary = input.title
-  if (input.description !== undefined) patch.description = input.description
-  if (input.location !== undefined) patch.location = input.location
-  if (input.start !== undefined) patch.start = toGoogleDateTime(input.start)
-  if (input.end !== undefined) patch.end = toGoogleDateTime(input.end)
-  const res = await getClient().events.patch({
-    calendarId: calId,
-    eventId,
-    requestBody: patch,
+  return withRetry(async () => {
+    const calId = calendarId()
+    const patch: calendar_v3.Schema$Event = {}
+    if (input.title !== undefined) patch.summary = input.title
+    if (input.description !== undefined) patch.description = input.description
+    if (input.location !== undefined) patch.location = input.location
+    if (input.start !== undefined) patch.start = toGoogleDateTime(input.start)
+    if (input.end !== undefined) patch.end = toGoogleDateTime(input.end)
+    const res = await getClient().events.patch({
+      calendarId: calId,
+      eventId,
+      requestBody: patch,
+    })
+    return mapEvent(res.data)
   })
-  return mapEvent(res.data)
 }
 
 export async function deleteEvent(eventId: string): Promise<void> {
-  await getClient().events.delete({
+  await withRetry(() => getClient().events.delete({
     calendarId: calendarId(),
     eventId,
-  })
+  }))
 }
 
 export async function getEvent(eventId: string): Promise<CalendarEvent> {
-  const res = await getClient().events.get({
-    calendarId: calendarId(),
-    eventId,
+  return withRetry(async () => {
+    const res = await getClient().events.get({
+      calendarId: calendarId(),
+      eventId,
+    })
+    return mapEvent(res.data)
   })
-  return mapEvent(res.data)
 }
 
 export async function listEvents(options: ListEventsOptions = {}): Promise<CalendarEvent[]> {
@@ -158,7 +165,7 @@ export async function listEvents(options: ListEventsOptions = {}): Promise<Calen
   let pageToken: string | undefined
 
   do {
-    const res = await client.events.list({
+    const page = await withRetry(() => client.events.list({
       calendarId: calId,
       timeMin: options.timeMin,
       timeMax: options.timeMax,
@@ -166,11 +173,11 @@ export async function listEvents(options: ListEventsOptions = {}): Promise<Calen
       singleEvents: true,
       orderBy: 'startTime',
       pageToken,
-    })
-    for (const item of res.data.items ?? []) {
+    }))
+    for (const item of page.data.items ?? []) {
       events.push(mapEvent(item))
     }
-    pageToken = res.data.nextPageToken ?? undefined
+    pageToken = page.data.nextPageToken ?? undefined
   } while (pageToken !== undefined)
 
   return events

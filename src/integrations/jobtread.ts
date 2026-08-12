@@ -1,3 +1,5 @@
+import { withRetry } from '../lib/retry'
+
 const PAVE_URL = 'https://api.jobtread.com/pave'
 
 // Org-specific custom field that holds the pipeline stage (Sold, Excavation, Plaster, etc.)
@@ -101,31 +103,33 @@ function extractStage(raw: Record<string, unknown>): string | null {
 }
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
-  const res = await fetch(PAVE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
+  return withRetry(async () => {
+    const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
+    const res = await fetch(PAVE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText}${text ? ` — ${text}` : ''}`)
+    }
+
+    let json: Record<string, unknown>
+    try {
+      json = await res.json() as Record<string, unknown>
+    } catch {
+      throw new Error(`Jobtread Pave returned non-JSON response (status ${res.status})`)
+    }
+
+    const errors = json.errors as unknown[]
+    if (Array.isArray(errors) && errors.length > 0) {
+      throw new Error(`Jobtread Pave error: ${JSON.stringify(errors)}`)
+    }
+
+    return json
   })
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`Jobtread Pave request failed: ${res.status} ${res.statusText}${text ? ` — ${text}` : ''}`)
-  }
-
-  let json: Record<string, unknown>
-  try {
-    json = await res.json() as Record<string, unknown>
-  } catch {
-    throw new Error(`Jobtread Pave returned non-JSON response (status ${res.status})`)
-  }
-
-  const errors = json.errors as unknown[]
-  if (Array.isArray(errors) && errors.length > 0) {
-    throw new Error(`Jobtread Pave error: ${JSON.stringify(errors)}`)
-  }
-
-  return json
 }
 
 function mapTask(t: Record<string, unknown>): Task {
