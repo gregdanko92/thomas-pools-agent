@@ -1,4 +1,5 @@
 import { App, LogLevel } from '@slack/bolt'
+import { withRetry } from '../lib/retry'
 import type {
   Middleware,
   SlackCommandMiddlewareArgs,
@@ -38,7 +39,7 @@ export function getApp(): App {
 }
 
 export async function postMessage(channel: string, text: string): Promise<void> {
-  await getApp().client.chat.postMessage({ channel, text })
+  await withRetry(() => getApp().client.chat.postMessage({ channel, text }))
 }
 
 export async function postBlocks(
@@ -46,7 +47,7 @@ export async function postBlocks(
   blocks: (KnownBlock | Block)[],
   fallbackText: string,
 ): Promise<void> {
-  await getApp().client.chat.postMessage({ channel, blocks, text: fallbackText })
+  await withRetry(() => getApp().client.chat.postMessage({ channel, blocks, text: fallbackText }))
 }
 
 export function registerSlashCommand(command: string, handler: SlashCommandHandler): void {
