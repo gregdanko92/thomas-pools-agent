@@ -5,6 +5,7 @@ import { postMessage } from '../integrations/slack'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
+import { withLock } from '../lib/cronLock'
 
 const ACTIVE_STAGES = [
   'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
@@ -136,7 +137,7 @@ export async function runEveningReport(): Promise<void> {
 // Fires daily at 5 PM America/Los_Angeles for end-of-day leadership review.
 export function startEveningReport(): void {
   cron.schedule('0 17 * * *', () => {
-    runEveningReport().catch(async err => {
+    withLock('evening-report', () => runEveningReport()).catch(async err => {
       console.error('[evening-report]', err instanceof Error ? err.message : err)
       await postErrorAlert('evening-report', err)
     })
