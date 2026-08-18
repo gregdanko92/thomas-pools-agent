@@ -4,6 +4,26 @@ const PAVE_URL = 'https://api.jobtread.com/pave'
 
 // Org-specific custom field that holds the pipeline stage (Sold, Excavation, Plaster, etc.)
 const STAGE_FIELD_ID = '22PAqEaW5wPt'
+const PM_FIELD_ID = '22PZNLLQSfgf'
+
+export const STAGE_ORDER: string[] = [
+  'Sold',
+  'Engineering / Permitting',
+  'Excavation',
+  'Steel',
+  'Plumbing / Electric',
+  'Gunnite',
+  'Coping / Tile',
+  'Hardscape / Landscape',
+  'Fence & Gate',
+  'Plaster',
+]
+
+export function nextStage(current: string): string | null {
+  const idx = STAGE_ORDER.indexOf(current)
+  if (idx === -1 || idx === STAGE_ORDER.length - 1) return null
+  return STAGE_ORDER[idx + 1]
+}
 
 function grantKey(): string {
   const key = process.env.JOBTREAD_GRANT_KEY?.trim()
@@ -24,6 +44,7 @@ export interface Job {
   name: string
   status: string
   stage: string | null
+  pm: string | null
   createdAt: string | null
   closedOn: string | null
   location: JobLocation | null
@@ -96,10 +117,18 @@ export interface CreateTaskInput {
 
 // --- Core ---
 
-function extractStage(raw: Record<string, unknown>): string | null {
+function extractCustomField(raw: Record<string, unknown>, fieldId: string): string | null {
   const cfv = raw.customFieldValues as { nodes: Array<{ value: string; customField: { id: string } }> } | undefined
   if (!cfv) return null
-  return cfv.nodes.find(n => n.customField.id === STAGE_FIELD_ID)?.value || null
+  return cfv.nodes.find(n => n.customField.id === fieldId)?.value || null
+}
+
+function extractStage(raw: Record<string, unknown>): string | null {
+  return extractCustomField(raw, STAGE_FIELD_ID)
+}
+
+function extractPm(raw: Record<string, unknown>): string | null {
+  return extractCustomField(raw, PM_FIELD_ID)
 }
 
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -182,7 +211,7 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
   const org = data.organization as Record<string, unknown> | null
   if (!org) return []
   const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
-  return rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
+  return rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw), pm: extractPm(raw) }))
 }
 
 async function expandPrefix(prefix: string): Promise<Job[]> {
@@ -315,6 +344,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
     name: raw.name as string,
     status: raw.status as string,
     stage: extractStage(raw),
+    pm: extractPm(raw),
     createdAt: (raw.createdAt as string | null) ?? null,
     closedOn: (raw.closedOn as string | null) ?? null,
     location: (raw.location as JobLocation | null) ?? null,

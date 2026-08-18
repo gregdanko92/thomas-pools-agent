@@ -7,6 +7,7 @@ create table project_channels (
   slack_channel_name text not null,
   jobtread_job_id text not null,
   jobtread_job_name text not null,
+  confirmed boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -71,6 +72,22 @@ create table calendar_sync (
   task_start text,
   task_end text,
   last_synced_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+-- 9. PM check-in threads — tracks per-job Slack threads and conversation state
+create table pm_checkin_threads (
+  id uuid primary key default gen_random_uuid(),
+  thread_ts text not null unique,
+  slack_channel_id text not null,
+  jobtread_job_id text not null,
+  jobtread_job_name text not null default '',
+  pm_name text not null,
+  pm_slack_user_id text not null,
+  checkin_stage text not null default '',
+  conversation_history jsonb not null default '[]',
+  status text not null default 'pending', -- pending | confirmed | delayed | resolved
+  checkin_date date not null default current_date,
   created_at timestamptz not null default now()
 );
 
