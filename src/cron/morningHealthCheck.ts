@@ -1,5 +1,6 @@
 import cron from 'node-cron'
 import { listJobs, getJob } from '../integrations/jobtread'
+import { nextStage, STAGE_ORDER } from '../integrations/jobtread'
 import type { JobDetail } from '../integrations/jobtread'
 import { postMessage } from '../integrations/slack'
 import { complete } from '../integrations/claude'
@@ -7,31 +8,68 @@ import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
 
-const ACTIVE_STAGES = [
-  'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
-  'Plumbing / Electric', 'Gunnite', 'Coping / Tile',
-  'Hardscape / Landscape', 'Fence & Gate', 'Plaster',
-]
+const ACTIVE_STAGES = STAGE_ORDER.filter(s => s !== 'On Hold')
 const TZ = 'America/Los_Angeles'
 
 const SYSTEM_PROMPT = `You are a morning briefing assistant for Thomas Pools, a pool construction company.
-You will receive data for all active jobs. Your job is to identify which ones need attention TODAY and summarize only those.
+You will receive Gantt status data for all active jobs including PM check-in responses from yesterday afternoon.
+Produce a concise leadership summary for Aaron and Mark.
 Use Slack formatting: wrap each job name in *asterisks* to make it bold. No other markdown — no headers, no bullet symbols, no dashes.
 
-Focus on jobs that have: pending documents awaiting customer action, denied documents needing follow-up, recent customer comments requiring a response, or jobs that have been open a long time with no activity.
-Skip jobs that are progressing normally with no blockers.
-For each flagged job, write the job name in bold, then the reason it needs attention, then put the recommended action on its own new line starting with "Action:".
-Keep the entire summary under 600 words. End with two lines: "Jobs needing attention: N" and "Total active jobs: M".`
+For each job include: current stage, projected dates if known, next stage, and PM response status.
+Flag: jobs where PM did not respond, jobs with active delays, outstanding invoices over $0, jobs missing a PM, jobs with no Slack channel mapped.
+Skip jobs with no notable status.
+End with: "Total active jobs: N" and "Jobs needing attention: M".`
 
-function buildPrompt(jobs: JobDetail[], totalActive: number): string {
+interface CheckinStatus {
+  status: string
+  summary: string
+}
+
+async function fetchCheckinStatuses(jobIds: string[]): Promise<Map<string, CheckinStatus>> {
+  // Use PT dates — check-ins are stored with PT-local dates from pmCheckin.ts
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
+  const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: TZ })
+
+  const { data } = await supabase
+    .from('pm_checkin_threads')
+    .select('jobtread_job_id, status, conversation_history, checkin_date')
+    .in('jobtread_job_id', jobIds)
+    .in('checkin_date', [today, yesterday])
+    .order('created_at', { ascending: false })
+
+  const map = new Map<string, CheckinStatus>()
+  for (const row of data ?? []) {
+    if (map.has(row.jobtread_job_id)) continue
+    const history = (row.conversation_history ?? []) as Array<{ role: string; content: string }>
+    const lastPmMsg = [...history].reverse().find(m => m.role === 'pm')
+    map.set(row.jobtread_job_id, {
+      status: row.status,
+      summary: lastPmMsg?.content ?? '(no reply)',
+    })
+  }
+  return map
+}
+
+async function fetchUnmappedJobs(jobIds: string[]): Promise<Set<string>> {
+  const { data } = await supabase
+    .from('project_channels')
+    .select('jobtread_job_id')
+    .in('jobtread_job_id', jobIds)
+
+  const mapped = new Set((data ?? []).map(r => r.jobtread_job_id))
+  return new Set(jobIds.filter(id => !mapped.has(id)))
+}
+
+function buildPrompt(jobs: JobDetail[], checkins: Map<string, CheckinStatus>, unmapped: Set<string>, totalActive: number): string {
   const headerDate = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     timeZone: TZ,
   })
 
   const lines: string[] = [
-    `Morning health check — ${headerDate}`,
-    `Total active jobs: ${totalActive}. Review all and flag only those needing attention today.`,
+    `Morning Gantt status report — ${headerDate}`,
+    `Total active jobs: ${totalActive}.`,
     '',
   ]
 
@@ -39,43 +77,36 @@ function buildPrompt(jobs: JobDetail[], totalActive: number): string {
     const name = /^job\s/i.test(job.name) && job.location?.address
       ? job.location.address
       : job.name
+
     lines.push(`JOB: ${name}`)
-    lines.push(`Stage: ${job.stage ?? job.status} | Created: ${(job.createdAt ?? '').slice(0, 10) || 'unknown'}`)
-    if (job.location?.address && !/^job\s/i.test(job.name)) lines.push(`Location: ${job.location.address}`)
+    lines.push(`Stage: ${job.stage ?? job.status} | PM: ${job.pm ?? 'UNASSIGNED'} | Next: ${job.stage ? (nextStage(job.stage) ?? 'Final') : 'unknown'}`)
 
-    if (job.tasks.length === 0) {
-      lines.push('Tasks: none')
+    if (unmapped.has(job.id)) lines.push('WARNING: No Slack channel mapped')
+
+    const checkin = checkins.get(job.id)
+    if (checkin) {
+      lines.push(`PM check-in: ${checkin.status} — ${checkin.summary}`)
     } else {
-      const taskList = job.tasks
-        .map(t => `${t.name} (${t.isToDo ? 'to-do' : 'scheduled'})`)
-        .join(', ')
-      lines.push(`Tasks (${job.tasks.length}): ${taskList}`)
+      lines.push('PM check-in: no response')
     }
 
-    for (const doc of job.documents) {
-      const price = doc.price !== null ? ` $${doc.price.toLocaleString()}` : ''
-      lines.push(`Document: ${doc.name} [${doc.type}/${doc.status}]${price}`)
-    }
-
-    const sorted = [...job.comments].sort((a, b) =>
-      (a.createdAt ?? '').localeCompare(b.createdAt ?? ''),
+    const pendingInvoices = job.documents.filter(
+      d => (d.type === 'invoice' || d.type === 'Invoice') && d.status !== 'paid',
     )
-    for (const c of sorted.slice(-2)) {
-      const author = c.account?.name ?? 'Unknown'
-      const commentDate = (c.createdAt ?? '').slice(0, 10) || 'unknown date'
-      lines.push(`Comment (${commentDate} — ${author}): ${c.message}`)
+    for (const inv of pendingInvoices) {
+      const amount = inv.price !== null ? ` $${inv.price.toLocaleString()}` : ''
+      lines.push(`Outstanding invoice: ${inv.name}${amount} [${inv.status}]`)
     }
 
     lines.push('')
   }
 
-  return `Review all active jobs below and produce a focused morning briefing:\n\n${lines.join('\n')}`
+  return `Produce a focused morning Gantt status report for leadership:\n\n${lines.join('\n')}`
 }
 
 export async function runMorningHealthCheck(): Promise<void> {
   let channel = ''
   let totalActive = 0
-  let jobsReviewed = 0
 
   try {
     const id = process.env.SLACK_MORNING_CHANNEL
@@ -84,7 +115,11 @@ export async function runMorningHealthCheck(): Promise<void> {
 
     const activeJobs = await listJobs({ stages: ACTIVE_STAGES })
     totalActive = activeJobs.length
-    jobsReviewed = totalActive
+
+    if (activeJobs.length === 0) {
+      await postMessage(channel, 'No active jobs this morning — nothing to report.')
+      return
+    }
 
     const results = await Promise.allSettled(activeJobs.map(j => getJob(j.id)))
     const details = results
@@ -93,7 +128,13 @@ export async function runMorningHealthCheck(): Promise<void> {
 
     if (details.length === 0) throw new Error('All getJob calls failed — no data to report')
 
-    const summary = await complete(buildPrompt(details, totalActive), { system: SYSTEM_PROMPT })
+    const jobIds = details.map(j => j.id)
+    const [checkins, unmapped] = await Promise.all([
+      fetchCheckinStatuses(jobIds),
+      fetchUnmappedJobs(jobIds),
+    ])
+
+    const summary = await complete(buildPrompt(details, checkins, unmapped, totalActive), { system: SYSTEM_PROMPT })
 
     await postMessage(channel, summary)
 
@@ -105,14 +146,14 @@ export async function runMorningHealthCheck(): Promise<void> {
       }),
       supabase.from('agent_run_log').insert({
         run_type: 'morning_check',
-        details: { totalActive, jobsReviewed, detailsFetched: details.length },
+        details: { totalActive, detailsFetched: details.length },
         success: true,
       }),
     ])
   } catch (err) {
     await supabase.from('agent_run_log').insert({
       run_type: 'morning_check',
-      details: { totalActive, jobsReviewed },
+      details: { totalActive },
       success: false,
       error_message: err instanceof Error ? err.message : String(err),
     }).then(() => undefined, () => undefined)

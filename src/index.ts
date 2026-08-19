@@ -2,11 +2,13 @@ import 'dotenv/config'
 import Fastify from 'fastify'
 import { startSlackApp } from './integrations/slack'
 import { registerStatusCommand } from './cases/status'
+import { registerPmCheckinReplyHandler } from './cases/pmCheckinReply'
 import { startMorningHealthCheck, runMorningHealthCheck } from './cron/morningHealthCheck'
 import { startEveningReport, runEveningReport } from './cron/eveningReport'
 import { startVendorOutreach, runVendorOutreach } from './cron/vendorOutreach'
 import { startCalendarSync, runCalendarSync } from './cron/calendarSync'
 import { startPaymentReminders, runPaymentReminders } from './cron/paymentReminders'
+import { startPmCheckin, runPmCheckin } from './cron/pmCheckin'
 import { postErrorAlert } from './lib/errorAlert'
 import { withLock } from './lib/cronLock'
 
@@ -76,14 +78,28 @@ server.post('/cron/payment-reminders', async (req, reply) => {
   return reply.status(202).send({ triggered: true })
 })
 
+server.post('/cron/pm-checkin', async (req, reply) => {
+  const secret = process.env.CRON_SECRET
+  if (secret && req.headers['x-cron-secret'] !== secret) {
+    return reply.status(401).send({ error: 'unauthorized' })
+  }
+  withLock('pm-checkin', () => runPmCheckin()).catch(async err => {
+    server.log.error({ err }, 'manual pm check-in failed')
+    await postErrorAlert('pm-checkin:manual', err)
+  })
+  return reply.status(202).send({ triggered: true })
+})
+
 const start = async () => {
   try {
     registerStatusCommand()
+    registerPmCheckinReplyHandler()
     startMorningHealthCheck()
     startEveningReport()
     startVendorOutreach()
     startCalendarSync()
     startPaymentReminders()
+    startPmCheckin()
     const port = Number(process.env.PORT) || 3000
     await server.listen({ port, host: '0.0.0.0' })
     await startSlackApp()
