@@ -264,7 +264,7 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
     const org = data.organization as Record<string, unknown> | null
     if (!org) throw new Error(`Jobtread organization not found — verify JOBTREAD_ORG_ID is correct`)
     const rawNodes = (org.jobs as { nodes: Array<Record<string, unknown>> }).nodes ?? []
-    allJobs = rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw) }))
+    allJobs = rawNodes.map(raw => ({ ...(raw as unknown as Job), stage: extractStage(raw), pm: extractPm(raw) }))
   } else {
     allJobs = await listAllJobs()
   }

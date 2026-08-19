@@ -120,6 +120,18 @@ export async function runPmCheckin(): Promise<void> {
     const stage = job.stage!
     const next = nextStage(stage)
 
+    // Skip jobs already checked in today to prevent duplicate messages on re-runs
+    const { data: existing } = await supabase
+      .from('pm_checkin_threads')
+      .select('id')
+      .eq('jobtread_job_id', job.id)
+      .eq('checkin_date', today)
+      .maybeSingle()
+    if (existing) {
+      skipped.push(`${job.name} — already checked in today`)
+      continue
+    }
+
     const stageTasks = findStageTasks(tasks, stage)
     const dateRange = formatDateRange(stageTasks)
 
@@ -141,7 +153,7 @@ export async function runPmCheckin(): Promise<void> {
 
     await supabase.from('pm_checkin_threads').upsert({
       thread_ts: threadTs,
-      slack_channel_id: channelId,
+      slack_channel_id: targetChannel, // in test mode this is the DM so replies route back correctly
       jobtread_job_id: job.id,
       jobtread_job_name: displayName(job),
       pm_name: pmName,

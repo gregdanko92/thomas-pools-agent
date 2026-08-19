@@ -77,7 +77,7 @@ export function registerPmCheckinReplyHandler(): void {
         .maybeSingle()
 
       if (error || !thread) return
-      if (thread.status === 'resolved' || thread.status === 'confirmed') return
+      if (thread.status === 'confirmed' || thread.status === 'delayed') return
 
       const replyText = (msg.text as string | undefined) ?? ''
       if (!replyText.trim()) return
@@ -110,17 +110,21 @@ export function registerPmCheckinReplyHandler(): void {
       const jobtreadNote = `PM check-in (${thread.checkin_date}): ${parsed.summary}`
       await createComment(thread.jobtread_job_id, jobtreadNote).catch(() => undefined)
 
-      if (parsed.status === 'delayed_no_date') {
+      if (parsed.status === 'delayed_with_date' && parsed.newDate) {
+        const delayMsg = `Got it — I've noted the delay in Jobtread. New expected completion: ${parsed.newDate}.`
+        await postInThread(thread.slack_channel_id, threadTs, delayMsg)
+        updatedHistory.push({ role: 'agent', content: delayMsg })
+      } else if (parsed.status === 'delayed_no_date') {
         const delayMsg = `Got it — I've noted the delay in Jobtread. I'll follow up tomorrow for an updated timeline.`
         await postInThread(thread.slack_channel_id, threadTs, delayMsg)
         updatedHistory.push({ role: 'agent', content: delayMsg })
       }
 
-      // For confirmed/delayed_with_date, append the summary to history.
-      // For delayed_no_date, the acknowledgement was already appended above.
-      const finalHistory = parsed.status === 'delayed_no_date'
-        ? updatedHistory
-        : [...updatedHistory, { role: 'agent', content: parsed.summary }]
+      // For confirmed, append the summary to history.
+      // For delayed paths, the acknowledgement was already appended above.
+      const finalHistory = parsed.status === 'confirmed'
+        ? [...updatedHistory, { role: 'agent', content: parsed.summary }]
+        : updatedHistory
 
       await supabase.from('pm_checkin_threads').update({
         status: parsed.status === 'confirmed' ? 'confirmed' : 'delayed',
