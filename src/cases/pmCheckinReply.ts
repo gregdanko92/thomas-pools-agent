@@ -3,6 +3,7 @@ import { createComment } from '../integrations/jobtread'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
+import { shiftJobGantt } from './shiftGantt'
 
 const SYSTEM_PROMPT = `You are an assistant managing construction project check-ins for Thomas Pools.
 A project manager has replied to a status check-in about a job's current Gantt stage.
@@ -111,7 +112,11 @@ export function registerPmCheckinReplyHandler(): void {
       await createComment(thread.jobtread_job_id, jobtreadNote).catch(() => undefined)
 
       if (parsed.status === 'delayed_with_date' && parsed.newDate) {
-        const delayMsg = `Got it — I've noted the delay in Jobtread. New expected completion: ${parsed.newDate}.`
+        const shift = await shiftJobGantt(thread.jobtread_job_id, parsed.newDate).catch(() => null)
+        const ganttNote = shift && shift.shiftedTasks > 0
+          ? ` Shifted ${shift.shiftedTasks} Gantt task${shift.shiftedTasks !== 1 ? 's' : ''} by ${shift.deltaDays} day${shift.deltaDays !== 1 ? 's' : ''}.`
+          : ''
+        const delayMsg = `Got it — new expected completion: ${parsed.newDate}.${ganttNote}`
         await postInThread(thread.slack_channel_id, threadTs, delayMsg)
         updatedHistory.push({ role: 'agent', content: delayMsg })
       } else if (parsed.status === 'delayed_no_date') {
