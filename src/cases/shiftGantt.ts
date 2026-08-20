@@ -1,6 +1,8 @@
-import { getJobTasks, updateTask } from '../integrations/jobtread'
+import { getJobTasks, updateTask, STAGE_TASK_KEYWORDS } from '../integrations/jobtread'
 import { updateEvent } from '../integrations/googleCalendar'
 import { supabase } from '../db/client'
+
+const TZ = 'America/Los_Angeles'
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr)
@@ -15,17 +17,35 @@ export interface ShiftResult {
 }
 
 // When a PM reports a delay with a new completion date, shift all future Jobtread
-// tasks forward by the gap between the earliest upcoming end date and the new date.
+// tasks forward by the gap between the delayed stage's current end date and the new date.
 // Then update matching Google Calendar events so the calendar stays in sync.
-export async function shiftJobGantt(jobId: string, newCompletionDate: string): Promise<ShiftResult> {
-  const today = new Date().toISOString().slice(0, 10)
+export async function shiftJobGantt(jobId: string, newCompletionDate: string, stage?: string): Promise<ShiftResult> {
+  // Reject non-YYYY-MM-DD strings before any computation — a natural-language date
+  // from the LLM produces NaN deltaDays that bypasses the <= 0 guard and crashes
+  // addDays mid-loop, leaving the Gantt in a partially-shifted state.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newCompletionDate) || isNaN(Date.parse(newCompletionDate))) {
+    return { deltaDays: 0, shiftedTasks: 0, shiftedEvents: 0 }
+  }
+
+  // Match the PT timezone used by the check-in cron so task cutoffs are consistent
+  // regardless of when during the day a PM reply arrives.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
   const tasks = await getJobTasks(jobId)
 
   const futureTasks = tasks.filter(t => t.endDate != null && t.endDate >= today)
   if (futureTasks.length === 0) return { deltaDays: 0, shiftedTasks: 0, shiftedEvents: 0 }
 
-  futureTasks.sort((a, b) => a.endDate!.localeCompare(b.endDate!))
-  const currentStageEnd = futureTasks[0].endDate!
+  // Anchor the delta to the stage being delayed, not the earliest task across all stages.
+  // Without stage filtering, an earlier-ending task from a different stage skews the delta,
+  // causing all tasks to shift by the wrong amount.
+  const keywords = stage ? (STAGE_TASK_KEYWORDS[stage] ?? []) : []
+  const stageTasks = keywords.length > 0
+    ? futureTasks.filter(t => keywords.some(kw => t.name.toLowerCase().includes(kw)))
+    : []
+  const anchorTasks = stageTasks.length > 0 ? stageTasks : futureTasks
+
+  anchorTasks.sort((a, b) => a.endDate!.localeCompare(b.endDate!))
+  const currentStageEnd = anchorTasks[0].endDate!
 
   const deltaDays = Math.round(
     (new Date(newCompletionDate).getTime() - new Date(currentStageEnd).getTime())

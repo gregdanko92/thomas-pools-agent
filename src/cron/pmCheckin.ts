@@ -1,7 +1,5 @@
 import cron from 'node-cron'
-import { listJobs } from '../integrations/jobtread'
-import { nextStage, STAGE_ORDER } from '../integrations/jobtread'
-import { getJobTasks } from '../integrations/jobtread'
+import { listJobs, nextStage, STAGE_ORDER, STAGE_TASK_KEYWORDS, getJobTasks } from '../integrations/jobtread'
 import type { Task } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
@@ -13,19 +11,6 @@ const TZ = 'America/Los_Angeles'
 // Stages that get PM check-ins (excludes On Hold)
 const CHECKIN_STAGES = STAGE_ORDER.filter(s => s !== 'On Hold')
 
-// Stage name → keywords used to find matching tasks in Jobtread
-const STAGE_TASK_KEYWORDS: Record<string, string[]> = {
-  'Sold': ['permit', 'plan', 'engineering'],
-  'Engineering / Permitting': ['permit', 'engineering'],
-  'Excavation': ['excavat'],
-  'Steel': ['steel'],
-  'Plumbing / Electric': ['plumbing', 'electric'],
-  'Gunnite': ['gunite', 'gunnite'],
-  'Coping / Tile': ['coping', 'tile'],
-  'Hardscape / Landscape': ['hardscape', 'landscape'],
-  'Fence & Gate': ['fence', 'gate'],
-  'Plaster': ['plaster'],
-}
 
 function findStageTasks(tasks: Task[], stage: string): Task[] {
   const keywords = STAGE_TASK_KEYWORDS[stage] ?? []
@@ -154,12 +139,15 @@ export async function runPmCheckin(): Promise<void> {
     const targetChannel = testMode ? testUserId! : channelId
 
     // Rule 4 — open thread handling
-    // Fetch the most recent pending thread for this job (any date)
+    // Fetch the most recent pending thread for this job AND current stage.
+    // Filtering by stage prevents nudging a stale thread from a previous stage
+    // after the job has advanced, which would block fresh check-ins indefinitely.
     const { data: pendingThread } = await supabase
       .from('pm_checkin_threads')
       .select('id, thread_ts, slack_channel_id, checkin_date')
       .eq('jobtread_job_id', job.id)
       .eq('status', 'pending')
+      .eq('checkin_stage', stage)
       .order('checkin_date', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -180,8 +168,11 @@ export async function runPmCheckin(): Promise<void> {
 
     // Rule 1 — lookahead window: only check in when a stage task ends within LOOKAHEAD_DAYS
     const stageTasks = findStageTasks(tasks, stage)
+    // Only consider tasks with an explicit endDate. Falling back to startDate would include
+    // tasks with only a past startDate, making daysUntilEnd a large negative that bypasses
+    // the lookahead guard and triggers check-ins on every cron run.
     const allStageDates = stageTasks
-      .map(t => t.endDate ?? t.startDate)
+      .map(t => t.endDate)
       .filter((d): d is string => d != null)
       .sort()
     const earliestEnd = allStageDates[0]

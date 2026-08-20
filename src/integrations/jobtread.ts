@@ -25,6 +25,20 @@ export function nextStage(current: string): string | null {
   return STAGE_ORDER[idx + 1]
 }
 
+// Maps each pipeline stage to the Jobtread task name keywords used to identify its tasks.
+export const STAGE_TASK_KEYWORDS: Record<string, string[]> = {
+  'Sold': ['permit', 'plan', 'engineering'],
+  'Engineering / Permitting': ['permit', 'engineering'],
+  'Excavation': ['excavat'],
+  'Steel': ['steel'],
+  'Plumbing / Electric': ['plumbing', 'electric'],
+  'Gunnite': ['gunite', 'gunnite'],
+  'Coping / Tile': ['coping', 'tile'],
+  'Hardscape / Landscape': ['hardscape', 'landscape'],
+  'Fence & Gate': ['fence', 'gate'],
+  'Plaster': ['plaster'],
+}
+
 function grantKey(): string {
   const key = process.env.JOBTREAD_GRANT_KEY?.trim()
   if (!key) throw new Error('JOBTREAD_GRANT_KEY is not set')
