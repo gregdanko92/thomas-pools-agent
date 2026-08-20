@@ -35,6 +35,31 @@ function findStageTasks(tasks: Task[], stage: string): Task[] {
   )
 }
 
+// Returns the last weekday on or before the given date (YYYY-MM-DD).
+function lastWeekdayOnOrBefore(dateStr: string): string {
+  const d = new Date(dateStr)
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1)
+  }
+  return d.toISOString().slice(0, 10)
+}
+
+// True when today is the last weekday before the stage deadline.
+// Handles weekend deadlines (Saturday/Sunday → Friday is eve) and
+// Monday deadlines (Friday is eve, not Sunday).
+function isDeadlineEve(endDate: string, today: string): boolean {
+  // The "effective deadline" is the last weekday on or before the end date
+  const effectiveDeadline = lastWeekdayOnOrBefore(endDate)
+  // The eve is the weekday immediately before that
+  const d = new Date(effectiveDeadline)
+  d.setUTCDate(d.getUTCDate() - 1)
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1)
+  }
+  // Also treat the deadline day itself as "eve" (last chance to confirm)
+  return today === d.toISOString().slice(0, 10) || today === effectiveDeadline
+}
+
 function formatDateRange(tasks: Task[]): string | null {
   const dated = tasks.filter(t => t.startDate)
   if (dated.length === 0) return null
@@ -171,10 +196,10 @@ export async function runPmCheckin(): Promise<void> {
     }
 
     // Rule 2 — cooldown: skip if confirmed or delayed within the last COOLDOWN_DAYS days.
-    // Exception: always check in the day before the deadline regardless of cooldown.
-    const isDeadlineEve = daysUntilEnd !== null && daysUntilEnd <= 1
+    // Exception: always check in on deadline eve (last weekday before/on the deadline).
+    const deadlineEve = earliestEnd ? isDeadlineEve(earliestEnd, today) : false
 
-    if (!isDeadlineEve) {
+    if (!deadlineEve) {
       const cooldownDate = new Date(Date.now() - COOLDOWN_DAYS * 86_400_000)
         .toLocaleDateString('en-CA', { timeZone: TZ })
       const { data: recentResolved } = await supabase
