@@ -153,23 +153,6 @@ export async function runPmCheckin(): Promise<void> {
       continue
     }
 
-    // Rule 2 — cooldown: skip if confirmed or delayed within the last COOLDOWN_DAYS days
-    const cooldownDate = new Date(Date.now() - COOLDOWN_DAYS * 86_400_000)
-      .toLocaleDateString('en-CA', { timeZone: TZ })
-    const { data: recentResolved } = await supabase
-      .from('pm_checkin_threads')
-      .select('id')
-      .eq('jobtread_job_id', job.id)
-      .in('status', ['confirmed', 'delayed'])
-      .gte('checkin_date', cooldownDate)
-      .limit(1)
-      .maybeSingle()
-
-    if (recentResolved) {
-      skipped.push(`${job.name} — resolved within last ${COOLDOWN_DAYS} days`)
-      continue
-    }
-
     // Rule 1 — lookahead window: only check in when a stage task ends within LOOKAHEAD_DAYS
     const stageTasks = findStageTasks(tasks, stage)
     const allStageDates = stageTasks
@@ -178,12 +161,33 @@ export async function runPmCheckin(): Promise<void> {
       .sort()
     const earliestEnd = allStageDates[0]
 
-    if (earliestEnd) {
-      const daysUntilEnd = Math.ceil(
-        (new Date(earliestEnd).getTime() - Date.now()) / 86_400_000,
-      )
-      if (daysUntilEnd > LOOKAHEAD_DAYS) {
-        skipped.push(`${job.name} — stage ends in ${daysUntilEnd} days (outside ${LOOKAHEAD_DAYS}-day window)`)
+    const daysUntilEnd = earliestEnd
+      ? Math.ceil((new Date(earliestEnd).getTime() - Date.now()) / 86_400_000)
+      : null
+
+    if (daysUntilEnd !== null && daysUntilEnd > LOOKAHEAD_DAYS) {
+      skipped.push(`${job.name} — stage ends in ${daysUntilEnd} days (outside ${LOOKAHEAD_DAYS}-day window)`)
+      continue
+    }
+
+    // Rule 2 — cooldown: skip if confirmed or delayed within the last COOLDOWN_DAYS days.
+    // Exception: always check in the day before the deadline regardless of cooldown.
+    const isDeadlineEve = daysUntilEnd !== null && daysUntilEnd <= 1
+
+    if (!isDeadlineEve) {
+      const cooldownDate = new Date(Date.now() - COOLDOWN_DAYS * 86_400_000)
+        .toLocaleDateString('en-CA', { timeZone: TZ })
+      const { data: recentResolved } = await supabase
+        .from('pm_checkin_threads')
+        .select('id')
+        .eq('jobtread_job_id', job.id)
+        .in('status', ['confirmed', 'delayed'])
+        .gte('checkin_date', cooldownDate)
+        .limit(1)
+        .maybeSingle()
+
+      if (recentResolved) {
+        skipped.push(`${job.name} — resolved within last ${COOLDOWN_DAYS} days`)
         continue
       }
     }
