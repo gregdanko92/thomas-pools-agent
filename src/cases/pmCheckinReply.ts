@@ -97,9 +97,17 @@ export function registerPmCheckinReplyHandler(): void {
         { role: 'pm', content: replyText },
       ]
 
-      if (parsed.status === 'needs_clarification' && parsed.followup) {
-        await postInThread(thread.slack_channel_id, threadTs, parsed.followup)
-        updatedHistory.push({ role: 'agent', content: parsed.followup })
+      // Threads that need more info — keep open, ask follow-up, don't resolve yet
+      const needsFollowup =
+        (parsed.status === 'needs_clarification' && parsed.followup) ||
+        parsed.status === 'delayed_no_date'
+
+      if (needsFollowup) {
+        const question = parsed.status === 'delayed_no_date'
+          ? `Got it — what's the new target date for the ${thread.checkin_stage} stage?`
+          : parsed.followup!
+        await postInThread(thread.slack_channel_id, threadTs, question)
+        updatedHistory.push({ role: 'agent', content: question })
 
         await supabase.from('pm_checkin_threads').update({
           conversation_history: updatedHistory,
@@ -119,14 +127,10 @@ export function registerPmCheckinReplyHandler(): void {
         const delayMsg = `Got it — new expected completion: ${parsed.newDate}.${ganttNote}`
         await postInThread(thread.slack_channel_id, threadTs, delayMsg)
         updatedHistory.push({ role: 'agent', content: delayMsg })
-      } else if (parsed.status === 'delayed_no_date') {
-        const delayMsg = `Got it — I've noted the delay in Jobtread. I'll follow up tomorrow for an updated timeline.`
-        await postInThread(thread.slack_channel_id, threadTs, delayMsg)
-        updatedHistory.push({ role: 'agent', content: delayMsg })
       }
 
       // For confirmed, append the summary to history.
-      // For delayed paths, the acknowledgement was already appended above.
+      // For delayed_with_date, the acknowledgement was already appended above.
       const finalHistory = parsed.status === 'confirmed'
         ? [...updatedHistory, { role: 'agent', content: parsed.summary }]
         : updatedHistory
