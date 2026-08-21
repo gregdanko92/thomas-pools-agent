@@ -48,7 +48,7 @@ export async function withRetry<T>(
     } catch (err) {
       if (attempt === maxAttempts || !retryable(err)) throw err
       const delay = baseDelayMs * 2 ** (attempt - 1) + Math.random() * 200
-      const cause = err instanceof TypeError && err.cause instanceof Error ? ` (cause: ${err.cause.message})` : ''
+      const cause = err instanceof TypeError && (err as unknown as { cause?: Error }).cause instanceof Error ? ` (cause: ${(err as unknown as { cause: Error }).cause.message})` : ''
       console.warn(
         `[retry] attempt ${attempt}/${maxAttempts} failed — retrying in ${Math.round(delay)}ms:`,
         err instanceof Error ? `${err.message}${cause}` : err,
