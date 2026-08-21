@@ -96,7 +96,10 @@ FROM pm_checkin_threads WHERE jobtread_job_id = '22PcxVVzRLCk';
 **Action:** In Greg's Slack DM, reply to the check-in thread:
 > "Yes everything looks good, on track"
 
-**Verify in Slack:** Bot replies in the same thread with a confirmation summary.
+**Verify in Slack:** Bot replies in the same thread:
+```
+Got it, thanks! Logged as on track for the *Engineering / Permitting* stage.
+```
 
 **Verify in Supabase:**
 ```sql
