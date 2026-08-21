@@ -482,7 +482,7 @@ export async function updateJob(jobId: string, input: UpdateJobInput): Promise<J
 export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<void> {
   await pave({
     updateTask: {
-      $: { input: { id: taskId, ...input } },
+      $: { id: taskId, ...input },
     },
   })
 }

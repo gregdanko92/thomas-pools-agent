@@ -126,7 +126,7 @@ async function shiftTaskDates(offsetDays: number): Promise<void> {
   for (const task of tasks) {
     const text = await paveRaw({
       updateTask: {
-        $: { input: { id: task.id, startDate: newStart, endDate: newEnd } },
+        $: { id: task.id, startDate: newStart, endDate: newEnd },
       },
     })
     console.log(`  Updated "${task.name}" → ${newStart} – ${newEnd}  (raw: ${text.slice(0, 80)})`)
