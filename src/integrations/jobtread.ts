@@ -245,10 +245,13 @@ async function listAllJobs(): Promise<Job[]> {
   const seen = new Set<string>()
   const all: Job[] = []
 
-  // Run 5 prefix fetches at a time to avoid triggering Jobtread's rate limiter.
-  // All 72 in parallel caused ETIMEDOUT blocks on Railway.
-  const CONCURRENCY = 5
+  // Run 2 prefix fetches at a time with a pause between batches to avoid
+  // triggering Jobtread's rate limiter. More than ~5 concurrent requests
+  // causes ETIMEDOUT blocks that persist and break subsequent API calls.
+  const CONCURRENCY = 2
+  const BATCH_DELAY_MS = 300
   for (let i = 0; i < prefixes.length; i += CONCURRENCY) {
+    if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
     const results = await Promise.allSettled(prefixes.slice(i, i + CONCURRENCY).map(expandPrefix))
     for (const result of results) {
       if (result.status === 'rejected') continue
