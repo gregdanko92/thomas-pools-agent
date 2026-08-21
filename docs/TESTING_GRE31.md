@@ -10,9 +10,13 @@ SLACK_TEST_USER_ID=U0BJXKM8TM0
 
 **Trigger command** (replace `<SECRET>` with Railway `CRON_SECRET` value):
 ```sh
+CRON_SECRET=<SECRET>
+
 curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
-  -H "x-cron-secret: <SECRET>"
+  -H "x-cron-secret: $CRON_SECRET"
 ```
+
+Set `CRON_SECRET` once at the top of your terminal session and reuse it throughout.
 
 **Setup script** (resets state, adjusts task dates, inserts fake rows for scheduling scenarios):
 ```sh
@@ -52,10 +56,15 @@ Once tasks exist, use `--shift-dates <N>` to move their end dates for each scena
 **Goal:** Verify a check-in message is sent when the test job has tasks inside the 5-day window and no prior threads.
 
 **Setup:**
-1. Confirm `pm_checkin_threads` has no rows for `22PcxVVzRLCk` (run `--status` or check Supabase)
-2. If tasks exist on the test job, optionally run `--shift-dates 3` so they have a date range to show in the message
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+```
 
-**Trigger:** Fire the cron with curl
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify in Slack (Greg's DM):**
 - Message contains `[TEST MODE — Intended Target: Mark in #C0BR66MCB5Y]`
@@ -78,7 +87,11 @@ FROM pm_checkin_threads WHERE jobtread_job_id = '22PcxVVzRLCk';
 
 **Setup:** Run immediately after Scenario 1 (thread still pending from today)
 
-**Trigger:** Fire the cron again
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify:**
 - No new Slack message appears
@@ -113,7 +126,11 @@ SELECT status, conversation_history FROM pm_checkin_threads WHERE jobtread_job_i
 
 **Setup:** Leave the `confirmed` row from Scenario 3 in place (do NOT reset)
 
-**Trigger:** Fire the cron
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify:**
 - No new Slack message
@@ -126,10 +143,19 @@ SELECT status, conversation_history FROM pm_checkin_threads WHERE jobtread_job_i
 **Goal:** Verify a delay reply with a date shifts Jobtread task dates.
 
 **Setup:**
-1. Create tasks in Jobtread UI if not already present (`Engineering Plan`, `Permit Application`)
-2. Run `npx tsx scripts/test-gre31-setup.ts --reset` then `--shift-dates 3`
-3. Note the current end dates shown in the script output
-4. Fire the cron → receive check-in in Slack DM
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+npx tsx scripts/test-gre31-setup.ts --shift-dates 3
+```
+(Create tasks in Jobtread UI first if not present: `Engineering Plan`, `Permit Application`)
+
+Note the end dates printed by the script — you'll use today+10 as your reply date so the delta is 7 days.
+
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Action:** Reply in the Slack thread:
 > "We're running behind, should be done by [today+10 in YYYY-MM-DD format]"
@@ -160,8 +186,16 @@ SELECT status FROM pm_checkin_threads WHERE jobtread_job_id = '22PcxVVzRLCk';
 **Goal:** Verify the two-step delay flow: agent asks for reschedule date, then shifts when PM provides it.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset` then `--shift-dates 3`
-2. Fire cron → receive check-in
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+npx tsx scripts/test-gre31-setup.ts --shift-dates 3
+```
+
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Action (step 1):** Reply in thread:
 > "We're behind on this"
@@ -188,8 +222,15 @@ Supabase: `status` still `'pending'`
 **Goal:** Verify Claude asks a follow-up question for unclear replies.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset`
-2. Fire cron
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+```
+
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Action:** Reply:
 > "maybe"
@@ -210,14 +251,26 @@ Could you clarify — is the current stage on track or is there a delay?
 **Goal:** Verify that an open thread from a previous day gets a nudge, not a new check-in.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset`
-2. Fire cron → creates pending thread for today
-3. Backdate it:
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+```
+
+**Trigger (first — creates the pending thread):**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
+
+**Then backdate the thread:**
 ```sh
 npx tsx scripts/test-gre31-setup.ts --fake-yesterday
 ```
 
-**Trigger:** Fire cron again
+**Trigger again (should nudge):**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify in Slack:** A new message appears **in the same thread** (not a top-level DM):
 ```
@@ -233,10 +286,16 @@ Just following up — any update on the *Engineering / Permitting* stage for *Te
 **Goal:** Verify jobs with deadlines >5 days out are skipped.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset`
-2. In Jobtread UI, set both task end dates to `today+8` — or run `--shift-dates 8` if tasks exist
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+npx tsx scripts/test-gre31-setup.ts --shift-dates 8
+```
 
-**Trigger:** Fire cron
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify:** No Slack message. Railway logs show:
 ```
@@ -250,11 +309,17 @@ skipped: ["Test Job — stage ends in 8 days (outside 5-day window)"]
 **Goal:** Verify that `isDeadlineEve` fires even when cooldown is active.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset`
-2. Set task end dates to tomorrow: `--shift-dates 1`
-3. Insert fake cooldown row: `npx tsx scripts/test-gre31-setup.ts --fake-cooldown`
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+npx tsx scripts/test-gre31-setup.ts --shift-dates 1
+npx tsx scripts/test-gre31-setup.ts --fake-cooldown
+```
 
-**Trigger:** Fire cron
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify:** Check-in fires despite cooldown — bot sends the message in Slack.
 
@@ -269,10 +334,16 @@ skipped: ["Test Job — stage ends in 8 days (outside 5-day window)"]
 **Goal:** Verify no check-in fires when the test job has no tasks matching stage keywords.
 
 **Setup:**
-1. `npx tsx scripts/test-gre31-setup.ts --reset`
-2. Ensure the test job has NO tasks in Jobtread (delete via the Jobtread UI if any exist)
+```sh
+npx tsx scripts/test-gre31-setup.ts --reset
+```
+Ensure the test job has NO tasks in Jobtread (delete via the Jobtread UI if any exist).
 
-**Trigger:** Fire cron
+**Trigger:**
+```sh
+curl -s -X POST https://thomas-pools-agent-production.up.railway.app/cron/pm-checkin \
+  -H "x-cron-secret: $CRON_SECRET"
+```
 
 **Verify:** No Slack message. The test job passes the lookahead check (because `daysUntilEnd` is null, which doesn't trigger the skip) but `findStageTasks` returns empty, so `dateRange` is null and the check-in fires with no date info.
 
