@@ -445,21 +445,13 @@ export async function getJobComments(jobId: string): Promise<Comment[]> {
 
 // --- Mutation helpers ---
 
-export async function createComment(jobId: string, message: string): Promise<Comment> {
-  const data = await pave({
+export async function createComment(jobId: string, message: string): Promise<void> {
+  await pave({
     createComment: {
-      $: { input: { jobId, message } },
-      id: true,
-      message: true,
-      createdAt: true,
-      account: {
-        id: true,
-        name: true,
-      },
+      $: { targetId: jobId, targetType: 'job', message },
     },
   })
 
-  return data.createComment as Comment
 }
 
 export async function updateJob(jobId: string, input: UpdateJobInput): Promise<Job> {
