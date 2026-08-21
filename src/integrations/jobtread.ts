@@ -241,18 +241,22 @@ async function expandPrefix(prefix: string): Promise<Job[]> {
 }
 
 async function listAllJobs(): Promise<Job[]> {
-  const batches = await Promise.allSettled([
-    ...CHARS.map(expandPrefix),
-    ...JOB_N_PREFIXES.map(expandPrefix),
-  ])
+  const prefixes = [...CHARS, ...JOB_N_PREFIXES]
   const seen = new Set<string>()
   const all: Job[] = []
-  for (const result of batches) {
-    if (result.status === 'rejected') continue
-    for (const job of result.value) {
-      if (!seen.has(job.id)) {
-        seen.add(job.id)
-        all.push(job)
+
+  // Run 5 prefix fetches at a time to avoid triggering Jobtread's rate limiter.
+  // All 72 in parallel caused ETIMEDOUT blocks on Railway.
+  const CONCURRENCY = 5
+  for (let i = 0; i < prefixes.length; i += CONCURRENCY) {
+    const results = await Promise.allSettled(prefixes.slice(i, i + CONCURRENCY).map(expandPrefix))
+    for (const result of results) {
+      if (result.status === 'rejected') continue
+      for (const job of result.value) {
+        if (!seen.has(job.id)) {
+          seen.add(job.id)
+          all.push(job)
+        }
       }
     }
   }
