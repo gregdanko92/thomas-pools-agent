@@ -78,7 +78,6 @@ export function registerPmCheckinReplyHandler(): void {
         .maybeSingle()
 
       if (error || !thread) return
-      if (thread.status === 'confirmed' || thread.status === 'delayed') return
 
       const replyText = (msg.text as string | undefined) ?? ''
       if (!replyText.trim()) return
