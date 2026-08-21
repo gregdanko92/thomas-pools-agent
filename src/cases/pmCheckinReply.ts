@@ -3,6 +3,7 @@ import { createComment } from '../integrations/jobtread'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
+import { shiftJobGantt } from './shiftGantt'
 
 const SYSTEM_PROMPT = `You are an assistant managing construction project check-ins for Thomas Pools.
 A project manager has replied to a status check-in about a job's current Gantt stage.
@@ -96,9 +97,30 @@ export function registerPmCheckinReplyHandler(): void {
         { role: 'pm', content: replyText },
       ]
 
-      if (parsed.status === 'needs_clarification' && parsed.followup) {
-        await postInThread(thread.slack_channel_id, threadTs, parsed.followup)
-        updatedHistory.push({ role: 'agent', content: parsed.followup })
+      // If the LLM classified as delayed_with_date but omitted the date, treat like
+      // delayed_no_date — keep the thread open and ask for the date explicitly.
+      // Without this, the thread silently closes with no PM-facing response.
+      if (parsed.status === 'delayed_with_date' && !parsed.newDate) {
+        parsed.status = 'delayed_no_date'
+      }
+
+      // Threads that need more info — keep open, ask follow-up, don't resolve yet
+      const needsFollowup =
+        (parsed.status === 'needs_clarification' && parsed.followup) ||
+        parsed.status === 'delayed_no_date'
+
+      if (needsFollowup) {
+        const question = parsed.status === 'delayed_no_date'
+          ? `Got it — what's the new target date for the ${thread.checkin_stage} stage?`
+          : parsed.followup!
+        await postInThread(thread.slack_channel_id, threadTs, question)
+        updatedHistory.push({ role: 'agent', content: question })
+
+        // Write a Jobtread comment so there's an audit trail even before we have the date.
+        if (parsed.status === 'delayed_no_date') {
+          const note = `PM check-in (${thread.checkin_date}): ${parsed.summary} (awaiting reschedule date)`
+          await createComment(thread.jobtread_job_id, note).catch(() => undefined)
+        }
 
         await supabase.from('pm_checkin_threads').update({
           conversation_history: updatedHistory,
@@ -111,17 +133,26 @@ export function registerPmCheckinReplyHandler(): void {
       await createComment(thread.jobtread_job_id, jobtreadNote).catch(() => undefined)
 
       if (parsed.status === 'delayed_with_date' && parsed.newDate) {
-        const delayMsg = `Got it — I've noted the delay in Jobtread. New expected completion: ${parsed.newDate}.`
-        await postInThread(thread.slack_channel_id, threadTs, delayMsg)
-        updatedHistory.push({ role: 'agent', content: delayMsg })
-      } else if (parsed.status === 'delayed_no_date') {
-        const delayMsg = `Got it — I've noted the delay in Jobtread. I'll follow up tomorrow for an updated timeline.`
+        // Pass the stage so shiftJobGantt anchors the delta to the delayed stage's tasks,
+        // not the earliest-ending task across all stages.
+        const shift = await shiftJobGantt(thread.jobtread_job_id, parsed.newDate, thread.checkin_stage).catch(() => null)
+        let delayMsg: string
+        if (shift && shift.deltaDays < 0) {
+          // PM gave a date earlier than the current Gantt end — job is tracking ahead.
+          // shiftJobGantt returns early for negative deltas, so no Gantt changes were made.
+          delayMsg = `Got it — noted ahead of schedule. New expected completion: ${parsed.newDate}.`
+        } else {
+          const ganttNote = shift && shift.shiftedTasks > 0
+            ? ` Shifted ${shift.shiftedTasks} Gantt task${shift.shiftedTasks !== 1 ? 's' : ''} by ${shift.deltaDays} day${shift.deltaDays !== 1 ? 's' : ''}.`
+            : ''
+          delayMsg = `Got it — new expected completion: ${parsed.newDate}.${ganttNote}`
+        }
         await postInThread(thread.slack_channel_id, threadTs, delayMsg)
         updatedHistory.push({ role: 'agent', content: delayMsg })
       }
 
       // For confirmed, append the summary to history.
-      // For delayed paths, the acknowledgement was already appended above.
+      // For delayed_with_date, the acknowledgement was already appended above.
       const finalHistory = parsed.status === 'confirmed'
         ? [...updatedHistory, { role: 'agent', content: parsed.summary }]
         : updatedHistory

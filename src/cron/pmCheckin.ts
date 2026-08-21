@@ -1,9 +1,7 @@
 import cron from 'node-cron'
-import { listJobs } from '../integrations/jobtread'
-import { nextStage, STAGE_ORDER } from '../integrations/jobtread'
-import { getJobTasks } from '../integrations/jobtread'
+import { listJobs, nextStage, STAGE_ORDER, STAGE_TASK_KEYWORDS, getJobTasks } from '../integrations/jobtread'
 import type { Task } from '../integrations/jobtread'
-import { postMessageWithTs, lookupUserByName } from '../integrations/slack'
+import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
@@ -13,19 +11,6 @@ const TZ = 'America/Los_Angeles'
 // Stages that get PM check-ins (excludes On Hold)
 const CHECKIN_STAGES = STAGE_ORDER.filter(s => s !== 'On Hold')
 
-// Stage name → keywords used to find matching tasks in Jobtread
-const STAGE_TASK_KEYWORDS: Record<string, string[]> = {
-  'Sold': ['permit', 'plan', 'engineering'],
-  'Engineering / Permitting': ['permit', 'engineering'],
-  'Excavation': ['excavat'],
-  'Steel': ['steel'],
-  'Plumbing / Electric': ['plumbing', 'electric'],
-  'Gunnite': ['gunite', 'gunnite'],
-  'Coping / Tile': ['coping', 'tile'],
-  'Hardscape / Landscape': ['hardscape', 'landscape'],
-  'Fence & Gate': ['fence', 'gate'],
-  'Plaster': ['plaster'],
-}
 
 function findStageTasks(tasks: Task[], stage: string): Task[] {
   const keywords = STAGE_TASK_KEYWORDS[stage] ?? []
@@ -33,6 +18,31 @@ function findStageTasks(tasks: Task[], stage: string): Task[] {
   return tasks.filter(t =>
     keywords.some(kw => t.name.toLowerCase().includes(kw)),
   )
+}
+
+// Returns the last weekday on or before the given date (YYYY-MM-DD).
+function lastWeekdayOnOrBefore(dateStr: string): string {
+  const d = new Date(dateStr)
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1)
+  }
+  return d.toISOString().slice(0, 10)
+}
+
+// True when today is the last weekday before the stage deadline.
+// Handles weekend deadlines (Saturday/Sunday → Friday is eve) and
+// Monday deadlines (Friday is eve, not Sunday).
+function isDeadlineEve(endDate: string, today: string): boolean {
+  // The "effective deadline" is the last weekday on or before the end date
+  const effectiveDeadline = lastWeekdayOnOrBefore(endDate)
+  // The eve is the weekday immediately before that
+  const d = new Date(effectiveDeadline)
+  d.setUTCDate(d.getUTCDate() - 1)
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() - 1)
+  }
+  // Also treat the deadline day itself as "eve" (last chance to confirm)
+  return today === d.toISOString().slice(0, 10) || today === effectiveDeadline
 }
 
 function formatDateRange(tasks: Task[]): string | null {
@@ -107,7 +117,14 @@ export async function runPmCheckin(): Promise<void> {
   )
 
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
+
+  // Only check in when the stage end date is within this many calendar days
+  const LOOKAHEAD_DAYS = 5
+  // Don't re-check a job that was confirmed or delayed this many days ago
+  const COOLDOWN_DAYS = 2
+
   const sent: string[] = []
+  const nudged: string[] = []
   const skipped: string[] = []
 
   for (const { job, channelId, tasks, pmUserId } of enriched) {
@@ -119,23 +136,80 @@ export async function runPmCheckin(): Promise<void> {
     const pmName = job.pm!
     const stage = job.stage!
     const next = nextStage(stage)
+    const targetChannel = testMode ? testUserId! : channelId
 
-    // Skip jobs already checked in today to prevent duplicate messages on re-runs
-    const { data: existing } = await supabase
+    // Rule 4 — open thread handling
+    // Fetch the most recent pending thread for this job AND current stage.
+    // Filtering by stage prevents nudging a stale thread from a previous stage
+    // after the job has advanced, which would block fresh check-ins indefinitely.
+    const { data: pendingThread } = await supabase
       .from('pm_checkin_threads')
-      .select('id')
+      .select('id, thread_ts, slack_channel_id, checkin_date')
       .eq('jobtread_job_id', job.id)
-      .eq('checkin_date', today)
+      .eq('status', 'pending')
+      .eq('checkin_stage', stage)
+      .order('checkin_date', { ascending: false })
+      .limit(1)
       .maybeSingle()
-    if (existing) {
-      skipped.push(`${job.name} — already checked in today`)
+
+    if (pendingThread) {
+      if (pendingThread.checkin_date === today) {
+        // Sent today and still unanswered — don't send again
+        skipped.push(`${job.name} — pending thread from today`)
+        continue
+      }
+      // Sent a previous day (24h+) with no reply — nudge in the existing thread
+      const nudgeChannel = testMode ? testUserId! : pendingThread.slack_channel_id
+      const nudge = `Just following up — any update on the *${stage}* stage for *${displayName(job)}*?`
+      await postInThread(nudgeChannel, pendingThread.thread_ts, nudge)
+      nudged.push(job.name)
       continue
     }
 
+    // Rule 1 — lookahead window: only check in when a stage task ends within LOOKAHEAD_DAYS
     const stageTasks = findStageTasks(tasks, stage)
-    const dateRange = formatDateRange(stageTasks)
+    // Only consider tasks with an explicit endDate. Falling back to startDate would include
+    // tasks with only a past startDate, making daysUntilEnd a large negative that bypasses
+    // the lookahead guard and triggers check-ins on every cron run.
+    const allStageDates = stageTasks
+      .map(t => t.endDate)
+      .filter((d): d is string => d != null)
+      .sort()
+    const earliestEnd = allStageDates[0]
 
-    const targetChannel = testMode ? testUserId! : channelId
+    const daysUntilEnd = earliestEnd
+      ? Math.ceil((new Date(earliestEnd).getTime() - Date.now()) / 86_400_000)
+      : null
+
+    if (daysUntilEnd !== null && daysUntilEnd > LOOKAHEAD_DAYS) {
+      skipped.push(`${job.name} — stage ends in ${daysUntilEnd} days (outside ${LOOKAHEAD_DAYS}-day window)`)
+      continue
+    }
+
+    // Rule 2 — cooldown: skip if confirmed or delayed within the last COOLDOWN_DAYS days.
+    // Exception: always check in on deadline eve (last weekday before/on the deadline).
+    const deadlineEve = earliestEnd ? isDeadlineEve(earliestEnd, today) : false
+
+    if (!deadlineEve) {
+      const cooldownDate = new Date(Date.now() - COOLDOWN_DAYS * 86_400_000)
+        .toLocaleDateString('en-CA', { timeZone: TZ })
+      const { data: recentResolved } = await supabase
+        .from('pm_checkin_threads')
+        .select('id')
+        .eq('jobtread_job_id', job.id)
+        .in('status', ['confirmed', 'delayed'])
+        .gte('checkin_date', cooldownDate)
+        .limit(1)
+        .maybeSingle()
+
+      if (recentResolved) {
+        skipped.push(`${job.name} — resolved within last ${COOLDOWN_DAYS} days`)
+        continue
+      }
+    }
+
+    // All rules passed — send a fresh check-in
+    const dateRange = formatDateRange(stageTasks)
     const targetLabel = `${pmName} in #${channelId}`
 
     const text = buildCheckinMessage(
@@ -153,7 +227,7 @@ export async function runPmCheckin(): Promise<void> {
 
     await supabase.from('pm_checkin_threads').upsert({
       thread_ts: threadTs,
-      slack_channel_id: targetChannel, // in test mode this is the DM so replies route back correctly
+      slack_channel_id: targetChannel,
       jobtread_job_id: job.id,
       jobtread_job_name: displayName(job),
       pm_name: pmName,
@@ -169,7 +243,7 @@ export async function runPmCheckin(): Promise<void> {
 
   await supabase.from('agent_run_log').insert({
     run_type: 'pm_checkin',
-    details: { sent: sent.length, skipped: skipped.length, skippedJobs: skipped },
+    details: { sent: sent.length, nudged: nudged.length, skipped: skipped.length, skippedJobs: skipped },
     success: true,
   }).then(() => undefined, () => undefined)
 }
