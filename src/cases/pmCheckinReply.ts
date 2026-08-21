@@ -151,11 +151,15 @@ export function registerPmCheckinReplyHandler(): void {
         updatedHistory.push({ role: 'agent', content: delayMsg })
       }
 
-      // For confirmed, append the summary to history.
-      // For delayed_with_date, the acknowledgement was already appended above.
-      const finalHistory = parsed.status === 'confirmed'
-        ? [...updatedHistory, { role: 'agent', content: parsed.summary }]
-        : updatedHistory
+      if (parsed.status === 'confirmed') {
+        const confirmMsg = `Got it, thanks! Logged as on track for the *${thread.checkin_stage}* stage.`
+        await postInThread(thread.slack_channel_id, threadTs, confirmMsg)
+        updatedHistory.push({ role: 'agent', content: confirmMsg })
+      }
+
+      // For confirmed, the acknowledgement was already appended above.
+      // For delayed_with_date, the acknowledgement was appended in the delay block above.
+      const finalHistory = updatedHistory
 
       await supabase.from('pm_checkin_threads').update({
         status: parsed.status === 'confirmed' ? 'confirmed' : 'delayed',
