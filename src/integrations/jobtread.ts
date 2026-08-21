@@ -483,7 +483,6 @@ export async function updateTask(taskId: string, input: UpdateTaskInput): Promis
   const data = await pave({
     updateTask: {
       $: { input: { id: taskId, ...input } },
-      id: true,
       name: true,
       isToDo: true,
       startDate: true,
@@ -495,7 +494,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput): Promis
     },
   })
 
-  return mapTask(data.updateTask as Record<string, unknown>)
+  return mapTask({ id: taskId, ...(data.updateTask as Record<string, unknown>) })
 }
 
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {

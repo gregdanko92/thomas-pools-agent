@@ -127,7 +127,6 @@ async function shiftTaskDates(offsetDays: number): Promise<void> {
     const text = await paveRaw({
       updateTask: {
         $: { input: { id: task.id, startDate: newStart, endDate: newEnd } },
-        id: true,
         startDate: true,
         endDate: true,
       },
@@ -155,7 +154,8 @@ async function fakeCooldown(): Promise<void> {
 }
 
 async function fakeYesterday(): Promise<void> {
-  const yesterday = addDays(new Date().toISOString().slice(0, 10), -1)
+  const todayPT = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
+  const yesterday = addDays(todayPT, -1)
   const { data, error } = await supabase
     .from('pm_checkin_threads')
     .update({ checkin_date: yesterday })
