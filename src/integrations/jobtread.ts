@@ -479,22 +479,12 @@ export async function updateJob(jobId: string, input: UpdateJobInput): Promise<J
   return data.updateJob as Job
 }
 
-export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<Task> {
-  const data = await pave({
+export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<void> {
+  await pave({
     updateTask: {
       $: { input: { id: taskId, ...input } },
-      name: true,
-      isToDo: true,
-      startDate: true,
-      endDate: true,
-      account: {
-        id: true,
-        name: true,
-      },
     },
   })
-
-  return mapTask({ id: taskId, ...(data.updateTask as Record<string, unknown>) })
 }
 
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {
