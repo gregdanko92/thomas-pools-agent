@@ -87,8 +87,10 @@ export async function runPmCheckin(): Promise<void> {
     throw new Error('SLACK_TEST_MODE is true but SLACK_TEST_USER_ID is not set')
   }
 
+  const pilotPm = process.env.PILOT_PM?.trim() || null
+
   const jobs = await listJobs({ stages: CHECKIN_STAGES })
-  const jobsWithPm = jobs.filter(j => j.pm)
+  const jobsWithPm = jobs.filter(j => j.pm && (!pilotPm || j.pm === pilotPm))
 
   // Fetch channel mappings for all relevant jobs in one query
   const jobIds = jobsWithPm.map(j => j.id)
