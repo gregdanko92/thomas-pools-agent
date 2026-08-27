@@ -76,6 +76,13 @@ export interface JobDetail extends Job {
   comments: Comment[]
 }
 
+export interface TaskDependent {
+  id: string
+  name: string
+  startDate: string | null
+  endDate: string | null
+}
+
 export interface Task {
   id: string
   name: string
@@ -83,6 +90,7 @@ export interface Task {
   startDate: string | null
   endDate: string | null
   account: TaskAccount | null
+  dependentTasks: TaskDependent[]
 }
 
 export interface TaskAccount {
@@ -176,6 +184,7 @@ async function pave(query: Record<string, unknown>): Promise<Record<string, unkn
 }
 
 function mapTask(t: Record<string, unknown>): Task {
+  const depNodes = (t.dependentTasks as { nodes: Array<Record<string, unknown>> } | undefined)?.nodes ?? []
   return {
     id: t.id as string,
     name: t.name as string,
@@ -183,6 +192,12 @@ function mapTask(t: Record<string, unknown>): Task {
     startDate: (t.startDate as string | null) ?? null,
     endDate: (t.endDate as string | null) ?? null,
     account: (t.account as TaskAccount | null) ?? null,
+    dependentTasks: depNodes.map(d => ({
+      id: d.id as string,
+      name: d.name as string,
+      startDate: (d.startDate as string | null) ?? null,
+      endDate: (d.endDate as string | null) ?? null,
+    })),
   }
 }
 
@@ -389,6 +404,14 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
           account: {
             id: true,
             name: true,
+          },
+          dependentTasks: {
+            nodes: {
+              id: true,
+              name: true,
+              startDate: true,
+              endDate: true,
+            },
           },
         },
       },

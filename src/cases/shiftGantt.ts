@@ -1,4 +1,5 @@
 import { getJobTasks, updateTask, STAGE_TASK_KEYWORDS } from '../integrations/jobtread'
+import type { Task } from '../integrations/jobtread'
 import { updateEvent } from '../integrations/googleCalendar'
 import { supabase } from '../db/client'
 
@@ -10,34 +11,32 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+function dateDiffDays(from: string, to: string): number {
+  return Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000)
+}
+
 export interface ShiftResult {
   deltaDays: number
   shiftedTasks: number
   shiftedEvents: number
 }
 
-// When a PM reports a delay with a new completion date, shift all future Jobtread
-// tasks forward by the gap between the delayed stage's current end date and the new date.
-// Then update matching Google Calendar events so the calendar stays in sync.
+// When a PM reports a delay, cascade-shift Gantt tasks starting from the delayed stage.
+// Only downstream tasks that are actually blocked (predecessor's new end overlaps their start)
+// are shifted — tasks with enough buffer to absorb the delay are left alone.
 export async function shiftJobGantt(jobId: string, newCompletionDate: string, stage?: string): Promise<ShiftResult> {
-  // Reject non-YYYY-MM-DD strings before any computation — a natural-language date
-  // from the LLM produces NaN deltaDays that bypasses the <= 0 guard and crashes
-  // addDays mid-loop, leaving the Gantt in a partially-shifted state.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newCompletionDate) || isNaN(Date.parse(newCompletionDate))) {
     return { deltaDays: 0, shiftedTasks: 0, shiftedEvents: 0 }
   }
 
-  // Match the PT timezone used by the check-in cron so task cutoffs are consistent
-  // regardless of when during the day a PM reply arrives.
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
   const tasks = await getJobTasks(jobId)
+  const taskMap = new Map<string, Task>(tasks.map(t => [t.id, t]))
 
   const futureTasks = tasks.filter(t => t.endDate != null && t.endDate >= today)
   if (futureTasks.length === 0) return { deltaDays: 0, shiftedTasks: 0, shiftedEvents: 0 }
 
-  // Anchor the delta to the stage being delayed, not the earliest task across all stages.
-  // Without stage filtering, an earlier-ending task from a different stage skews the delta,
-  // causing all tasks to shift by the wrong amount.
+  // Anchor the delta to the stage being delayed
   const keywords = stage ? (STAGE_TASK_KEYWORDS[stage] ?? []) : []
   const stageTasks = keywords.length > 0
     ? futureTasks.filter(t => keywords.some(kw => t.name.toLowerCase().includes(kw)))
@@ -54,23 +53,49 @@ export async function shiftJobGantt(jobId: string, newCompletionDate: string, st
 
   if (deltaDays <= 0) return { deltaDays, shiftedTasks: 0, shiftedEvents: 0 }
 
-  // Shift Jobtread task dates and track new values for calendar sync
+  // BFS through dependency graph — only shift a downstream task if the predecessor's
+  // new end date actually overlaps with its start date (eats into its buffer).
   const taskUpdates = new Map<string, { newStart: string | null; newEnd: string }>()
+  const queue: Array<{ task: Task; shiftDays: number }> = anchorTasks.map(t => ({ task: t, shiftDays: deltaDays }))
+  const visited = new Set<string>()
 
-  for (const task of futureTasks) {
-    const newEnd = addDays(task.endDate!, deltaDays)
+  while (queue.length > 0) {
+    const { task, shiftDays } = queue.shift()!
+    if (visited.has(task.id)) continue
+    visited.add(task.id)
+    if (!task.endDate) continue
+
+    const newEnd = addDays(task.endDate, shiftDays)
     const newStart = task.startDate && task.startDate >= today
-      ? addDays(task.startDate, deltaDays)
+      ? addDays(task.startDate, shiftDays)
       : task.startDate ?? null
 
-    const input: Parameters<typeof updateTask>[1] = { endDate: newEnd }
-    if (newStart !== task.startDate) input.startDate = newStart ?? undefined
-
-    await updateTask(task.id, input)
     taskUpdates.set(task.id, { newStart, newEnd })
+
+    for (const dep of task.dependentTasks) {
+      if (visited.has(dep.id) || !dep.startDate) continue
+
+      // How many days does the predecessor's new end overlap with the dependent's start?
+      // If newEnd is 09-03 and dep starts 09-04, no overlap — dep stays put.
+      // If newEnd is 09-04 and dep starts 09-04, dep must move to 09-05 (1 day shift).
+      // Formula: depShift = (newEnd - dep.startDate) + 1, applied only when positive.
+      const depShift = dateDiffDays(dep.startDate, newEnd) + 1
+      if (depShift <= 0) continue
+
+      const depTask = taskMap.get(dep.id)
+      if (depTask) queue.push({ task: depTask, shiftDays: depShift })
+    }
   }
 
-  // Update Google Calendar events for shifted tasks
+  // Apply Jobtread updates
+  for (const [taskId, { newStart, newEnd }] of taskUpdates) {
+    const task = taskMap.get(taskId)!
+    const input: Parameters<typeof updateTask>[1] = { endDate: newEnd }
+    if (newStart !== task.startDate) input.startDate = newStart ?? undefined
+    await updateTask(taskId, input)
+  }
+
+  // Sync Google Calendar events for shifted tasks
   const { data: syncRows } = await supabase
     .from('calendar_sync')
     .select('jobtread_task_id, google_event_id')
@@ -81,7 +106,6 @@ export async function shiftJobGantt(jobId: string, newCompletionDate: string, st
     const update = taskUpdates.get(row.jobtread_task_id)
     if (!update) continue
 
-    // 200ms spacing to stay within Google Calendar API quota
     await new Promise(r => setTimeout(r, 200))
 
     try {
@@ -108,5 +132,5 @@ export async function shiftJobGantt(jobId: string, newCompletionDate: string, st
     }
   }
 
-  return { deltaDays, shiftedTasks: futureTasks.length, shiftedEvents }
+  return { deltaDays, shiftedTasks: taskUpdates.size, shiftedEvents }
 }
