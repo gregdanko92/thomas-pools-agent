@@ -314,6 +314,103 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   return allJobs
 }
 
+// --- Organisation-level task scanning ---
+
+export interface OrgTask {
+  id: string
+  name: string
+  isToDo: boolean
+  startDate: string | null
+  endDate: string | null
+  jobId: string
+  jobName: string
+  jobStage: string | null
+  jobPm: string | null
+  jobLocation: JobLocation | null
+}
+
+function mapOrgTask(raw: Record<string, unknown>): OrgTask {
+  const job = raw.job as Record<string, unknown>
+  return {
+    id: raw.id as string,
+    name: raw.name as string,
+    isToDo: raw.isToDo as boolean,
+    startDate: (raw.startDate as string | null) ?? null,
+    endDate: (raw.endDate as string | null) ?? null,
+    jobId: job.id as string,
+    jobName: job.name as string,
+    jobStage: extractStage(job),
+    jobPm: extractPm(job),
+    jobLocation: (job.location as JobLocation | null) ?? null,
+  }
+}
+
+async function fetchOrgTasksByPrefix(prefix: string): Promise<OrgTask[]> {
+  const data = await pave({
+    organization: {
+      $: { id: orgId() },
+      tasks: {
+        $: { where: ['name', 'like', `${prefix}%`] },
+        nodes: {
+          id: true,
+          name: true,
+          isToDo: true,
+          startDate: true,
+          endDate: true,
+          job: {
+            id: true,
+            name: true,
+            location: { id: true, name: true, address: true },
+            customFieldValues: {
+              nodes: { value: true, customField: { id: true } },
+            },
+          },
+        },
+      },
+    },
+  })
+  const org = data.organization as Record<string, unknown> | null
+  if (!org) return []
+  const nodes = (org.tasks as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+  return nodes.map(mapOrgTask)
+}
+
+async function expandOrgTaskPrefix(prefix: string): Promise<OrgTask[]> {
+  const batch = await fetchOrgTasksByPrefix(prefix)
+  if (batch.length < PAVE_PAGE_SIZE) return batch
+  const subBatches = await Promise.allSettled(CHARS.map(c => expandOrgTaskPrefix(prefix + c)))
+  const all = [...batch]
+  for (const r of subBatches) {
+    if (r.status === 'fulfilled') all.push(...r.value)
+  }
+  return all
+}
+
+// Scans all tasks across the org by name prefix. Slow but complete — use for
+// scheduled cron work where accuracy matters more than latency.
+export async function listAllOrgTasks(): Promise<OrgTask[]> {
+  const seen = new Set<string>()
+  const all: OrgTask[] = []
+  const CONCURRENCY = 2
+  const BATCH_DELAY_MS = 300
+  for (let i = 0; i < CHARS.length; i += CONCURRENCY) {
+    if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
+    const results = await Promise.allSettled(
+      CHARS.slice(i, i + CONCURRENCY).map(expandOrgTaskPrefix),
+    )
+    for (const result of results) {
+      if (result.status === 'rejected') continue
+      for (const task of result.value) {
+        if (!seen.has(task.id)) {
+          seen.add(task.id)
+          all.push(task)
+        }
+      }
+    }
+  }
+  return all
+}
+
 export async function getJob(jobId: string): Promise<JobDetail> {
   const data = await pave({
     job: {
