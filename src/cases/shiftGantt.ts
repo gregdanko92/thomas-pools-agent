@@ -55,6 +55,7 @@ export async function shiftJobGantt(jobId: string, newCompletionDate: string, st
 
   // BFS through dependency graph — only shift a downstream task if the predecessor's
   // new end date actually overlaps with its start date (eats into its buffer).
+  const anchorIds = new Set(anchorTasks.map(t => t.id))
   const taskUpdates = new Map<string, { newStart: string | null; newEnd: string }>()
   const queue: Array<{ task: Task; shiftDays: number }> = anchorTasks.map(t => ({ task: t, shiftDays: deltaDays }))
   const visited = new Set<string>()
@@ -66,9 +67,11 @@ export async function shiftJobGantt(jobId: string, newCompletionDate: string, st
     if (!task.endDate) continue
 
     const newEnd = addDays(task.endDate, shiftDays)
-    const newStart = task.startDate && task.startDate >= today
-      ? addDays(task.startDate, shiftDays)
-      : task.startDate ?? null
+    // Anchor tasks are already in progress — only extend their end date, leave start alone.
+    // Downstream dependent tasks shift both start and end.
+    const newStart = anchorIds.has(task.id)
+      ? task.startDate ?? null
+      : (task.startDate && task.startDate >= today ? addDays(task.startDate, shiftDays) : task.startDate ?? null)
 
     taskUpdates.set(task.id, { newStart, newEnd })
 
