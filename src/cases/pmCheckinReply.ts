@@ -78,11 +78,13 @@ export function registerPmCheckinReplyHandler(): void {
         .eq('thread_ts', threadTs)
         .maybeSingle()
 
+      console.log('[pm-checkin-reply] thread lookup', { found: !!thread, error: error?.message })
       if (error || !thread) return
 
       const replyText = (msg.text as string | undefined) ?? ''
       if (!replyText.trim()) return
 
+      console.log('[pm-checkin-reply] calling parseReply for', thread.jobtread_job_name)
       const history = (thread.conversation_history ?? []) as Array<{ role: string; content: string }>
 
       const parsed = await parseReply(
@@ -173,6 +175,7 @@ export function registerPmCheckinReplyHandler(): void {
         success: true,
       }).then(() => undefined, () => undefined)
     } catch (err) {
+      console.error('[pm-checkin-reply] error:', err instanceof Error ? err.message : err)
       await postErrorAlert('pm-checkin-reply', err)
     }
   })
