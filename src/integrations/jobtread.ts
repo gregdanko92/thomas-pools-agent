@@ -156,11 +156,19 @@ function extractPm(raw: Record<string, unknown>): string | null {
 async function pave(query: Record<string, unknown>): Promise<Record<string, unknown>> {
   return withRetry(async () => {
     const body = JSON.stringify({ query: { $: { grantKey: grantKey() }, ...query } })
-    const res = await fetch(PAVE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), 15_000)
+    let res: Response
+    try {
+      res = await fetch(PAVE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: abort.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '')
