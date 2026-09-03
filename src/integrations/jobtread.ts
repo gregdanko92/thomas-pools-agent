@@ -375,13 +375,18 @@ async function fetchOrgTasksByPrefix(prefix: string): Promise<OrgTask[]> {
   return nodes.map(mapOrgTask)
 }
 
-async function expandOrgTaskPrefix(prefix: string): Promise<OrgTask[]> {
+async function expandOrgTaskPrefix(prefix: string, concurrency = 2, delayMs = 300): Promise<OrgTask[]> {
   const batch = await fetchOrgTasksByPrefix(prefix)
   if (batch.length < PAVE_PAGE_SIZE) return batch
-  const subBatches = await Promise.allSettled(CHARS.map(c => expandOrgTaskPrefix(prefix + c)))
   const all = [...batch]
-  for (const r of subBatches) {
-    if (r.status === 'fulfilled') all.push(...r.value)
+  for (let i = 0; i < CHARS.length; i += concurrency) {
+    if (i > 0) await new Promise(r => setTimeout(r, delayMs))
+    const results = await Promise.allSettled(
+      CHARS.slice(i, i + concurrency).map(c => expandOrgTaskPrefix(prefix + c, concurrency, delayMs)),
+    )
+    for (const r of results) {
+      if (r.status === 'fulfilled') all.push(...r.value)
+    }
   }
   return all
 }
@@ -396,7 +401,7 @@ export async function listAllOrgTasks(): Promise<OrgTask[]> {
   for (let i = 0; i < CHARS.length; i += CONCURRENCY) {
     if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
     const results = await Promise.allSettled(
-      CHARS.slice(i, i + CONCURRENCY).map(expandOrgTaskPrefix),
+      CHARS.slice(i, i + CONCURRENCY).map(c => expandOrgTaskPrefix(c, CONCURRENCY, BATCH_DELAY_MS)),
     )
     for (const result of results) {
       if (result.status === 'rejected') continue
