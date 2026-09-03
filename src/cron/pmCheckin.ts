@@ -1,6 +1,6 @@
 import cron from 'node-cron'
-import { listAllOrgTasks, nextStage, STAGE_ORDER } from '../integrations/jobtread'
-import type { OrgTask } from '../integrations/jobtread'
+import { listJobs, getJobTasks, nextStage, STAGE_ORDER } from '../integrations/jobtread'
+import type { Task } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
@@ -35,7 +35,7 @@ function isDeadlineEve(endDate: string, today: string): boolean {
   return today === d.toISOString().slice(0, 10) || today === effectiveDeadline
 }
 
-function formatDateRange(tasks: OrgTask[]): string | null {
+function formatDateRange(tasks: Task[]): string | null {
   const dated = tasks.filter(t => t.startDate)
   if (dated.length === 0) return null
   const starts = dated.map(t => t.startDate!).sort()
@@ -80,9 +80,11 @@ export async function runPmCheckin(): Promise<void> {
   const COOLDOWN_DAYS = 2
   const lookaheadCutoff = addDays(today, LOOKAHEAD_DAYS)
 
-  // Fetch all scheduled tasks across the org and group by job.
-  // Only include tasks that end within the lookahead window and belong to an active stage.
-  const allTasks = await listAllOrgTasks()
+  // Fetch active jobs with stage and PM, then get tasks per job in parallel.
+  // Filters tasks by end date instead of stage keywords — no keyword matching needed.
+  const activeStages = STAGE_ORDER.filter(s => s !== 'On Hold')
+  const jobs = await listJobs({ stages: activeStages })
+  const jobsWithPm = jobs.filter(j => j.stage && j.pm && (!pilotPm || j.pm === pilotPm))
 
   type JobGroup = {
     jobId: string
@@ -90,35 +92,27 @@ export async function runPmCheckin(): Promise<void> {
     jobStage: string
     jobPm: string
     jobLocation: { address: string | null } | null
-    tasks: OrgTask[]
+    tasks: Task[]
     earliestEnd: string
   }
 
   const jobGroups = new Map<string, JobGroup>()
 
-  for (const task of allTasks) {
-    if (!task.endDate) continue
-    if (task.endDate < today || task.endDate > lookaheadCutoff) continue
-    if (!task.jobStage || !CHECKIN_STAGES.has(task.jobStage)) continue
-    if (!task.jobPm) continue
-    if (pilotPm && task.jobPm !== pilotPm) continue
-
-    const existing = jobGroups.get(task.jobId)
-    if (existing) {
-      existing.tasks.push(task)
-      if (task.endDate < existing.earliestEnd) existing.earliestEnd = task.endDate
-    } else {
-      jobGroups.set(task.jobId, {
-        jobId: task.jobId,
-        jobName: task.jobName,
-        jobStage: task.jobStage,
-        jobPm: task.jobPm,
-        jobLocation: task.jobLocation,
-        tasks: [task],
-        earliestEnd: task.endDate,
-      })
-    }
-  }
+  await Promise.all(jobsWithPm.map(async job => {
+    const tasks = await getJobTasks(job.id)
+    const windowTasks = tasks.filter(t => t.endDate && t.endDate >= today && t.endDate <= lookaheadCutoff)
+    if (windowTasks.length === 0) return
+    const earliestEnd = windowTasks.map(t => t.endDate!).sort()[0]
+    jobGroups.set(job.id, {
+      jobId: job.id,
+      jobName: job.name,
+      jobStage: job.stage!,
+      jobPm: job.pm!,
+      jobLocation: job.location,
+      tasks: windowTasks,
+      earliestEnd,
+    })
+  }))
 
   // Fetch channel mappings for qualifying jobs in one query
   const { data: channelRows, error } = await supabase
