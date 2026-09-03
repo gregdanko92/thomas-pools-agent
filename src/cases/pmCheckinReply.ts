@@ -61,6 +61,7 @@ export function registerPmCheckinReplyHandler(): void {
   // Listen for all messages; filter to thread replies on tracked threads
   getApp().event('message', async ({ event }) => {
     const msg = event as unknown as Record<string, unknown>
+    console.log('[pm-checkin-reply] message event received', JSON.stringify({ type: msg.type, subtype: msg.subtype, thread_ts: msg.thread_ts, bot_id: msg.bot_id, channel: msg.channel }))
 
     // Only handle thread replies (has thread_ts, not a top-level message)
     const threadTs = msg.thread_ts as string | undefined
