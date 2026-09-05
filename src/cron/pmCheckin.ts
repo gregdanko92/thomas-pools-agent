@@ -74,7 +74,9 @@ export async function runPmCheckin(): Promise<void> {
     throw new Error('SLACK_TEST_MODE is true but SLACK_TEST_CHANNEL_ID is not set')
   }
 
-  const pilotPm = process.env.PILOT_PM?.trim() || null
+  const pilotPms = process.env.PILOT_PM
+    ? new Set(process.env.PILOT_PM.split(',').map(s => s.trim()).filter(Boolean))
+    : null
   const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
   const LOOKAHEAD_DAYS = 5
   const COOLDOWN_DAYS = 2
@@ -84,7 +86,7 @@ export async function runPmCheckin(): Promise<void> {
   // Filters tasks by end date instead of stage keywords — no keyword matching needed.
   const activeStages = STAGE_ORDER.filter(s => s !== 'On Hold')
   const jobs = await listJobs({ stages: activeStages })
-  const jobsWithPm = jobs.filter(j => j.stage && j.pm && (!pilotPm || j.pm === pilotPm))
+  const jobsWithPm = jobs.filter(j => j.stage && j.pm && (!pilotPms || pilotPms.has(j.pm)))
 
   type JobGroup = {
     jobId: string
@@ -220,7 +222,7 @@ export async function runPmCheckin(): Promise<void> {
     .neq('checkin_date', today)
 
   for (const thread of stalePending ?? []) {
-    if (pilotPm && thread.pm_name !== pilotPm) continue
+    if (pilotPms && !pilotPms.has(thread.pm_name)) continue
     // Skip if we already nudged this job in the loop above
     if (nudged.includes(thread.jobtread_job_name)) continue
     const nudgeChannel = testMode ? testChannelId! : thread.slack_channel_id
