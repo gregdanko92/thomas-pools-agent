@@ -3,14 +3,14 @@ import { createComment } from '../integrations/jobtread'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
-import { shiftJobGantt } from './shiftGantt'
+import { shiftJobGantt, shiftTaskGantt } from './shiftGantt'
 
 const SYSTEM_PROMPT = `You are an assistant managing construction project check-ins for Thomas Pools.
-A project manager has replied to a status check-in about a job's current Gantt stage.
+A project manager has replied to a status check-in about a specific task on a job.
 
 Classify the reply as one of:
-- "confirmed" — PM says things are on track, no issues
-- "delayed_with_date" — PM indicates a delay and provides a new expected date or timeframe
+- "confirmed" — PM says the task is on track, no issues
+- "delayed_with_date" — PM indicates a delay and provides a new expected completion date or timeframe
 - "delayed_no_date" — PM indicates a delay but has no new timeline yet
 - "needs_clarification" — the reply is ambiguous and you need to ask a follow-up question
 
@@ -19,7 +19,7 @@ Respond with a JSON object:
   "status": "confirmed" | "delayed_with_date" | "delayed_no_date" | "needs_clarification",
   "summary": "one sentence summary of the PM's response for the Jobtread comment",
   "followup": "follow-up question to ask in Slack thread if status is needs_clarification, otherwise null",
-  "newDate": "YYYY-MM-DD of the new expected completion if status is delayed_with_date, otherwise null"
+  "newDate": "YYYY-MM-DD of the new expected completion date if status is delayed_with_date, otherwise null"
 }`
 
 interface ParsedReply {
@@ -32,14 +32,14 @@ interface ParsedReply {
 async function parseReply(
   pmReply: string,
   jobName: string,
-  stage: string,
+  taskName: string,
   history: Array<{ role: string; content: string }>,
 ): Promise<ParsedReply> {
   const context = history
     .map(m => `${m.role === 'agent' ? 'Agent' : 'PM'}: ${m.content}`)
     .join('\n')
 
-  const prompt = `Job: ${jobName}\nCurrent stage: ${stage}\n\nConversation so far:\n${context}\n\nLatest PM reply: ${pmReply}\n\nClassify this reply.`
+  const prompt = `Job: ${jobName}\nTask: ${taskName}\n\nConversation so far:\n${context}\n\nLatest PM reply: ${pmReply}\n\nClassify this reply.`
 
   const raw = await complete(prompt, { system: SYSTEM_PROMPT })
 
@@ -83,10 +83,11 @@ export function registerPmCheckinReplyHandler(): void {
       if (!replyText.trim()) return
       const history = (thread.conversation_history ?? []) as Array<{ role: string; content: string }>
 
+      const taskRef = thread.task_name ?? thread.checkin_stage
       const parsed = await parseReply(
         replyText,
         thread.jobtread_job_name,
-        thread.checkin_stage,
+        taskRef,
         history,
       )
 
@@ -109,7 +110,7 @@ export function registerPmCheckinReplyHandler(): void {
 
       if (needsFollowup) {
         const question = parsed.status === 'delayed_no_date'
-          ? `Got it — what's the new target date for the ${thread.checkin_stage} stage?`
+          ? `Got it — what's the new target completion date for the *${taskRef}* task?`
           : parsed.followup!
         await postInThread(thread.slack_channel_id, threadTs, question)
         updatedHistory.push({ role: 'agent', content: question })
@@ -131,9 +132,9 @@ export function registerPmCheckinReplyHandler(): void {
       await createComment(thread.jobtread_job_id, jobtreadNote).catch(() => undefined)
 
       if (parsed.status === 'delayed_with_date' && parsed.newDate) {
-        // Pass the stage so shiftJobGantt anchors the delta to the delayed stage's tasks,
-        // not the earliest-ending task across all stages.
-        const shift = await shiftJobGantt(thread.jobtread_job_id, parsed.newDate, thread.checkin_stage).catch(() => null)
+        const shift = thread.jobtread_task_id
+          ? await shiftTaskGantt(thread.jobtread_job_id, thread.jobtread_task_id, parsed.newDate).catch(() => null)
+          : await shiftJobGantt(thread.jobtread_job_id, parsed.newDate, thread.checkin_stage).catch(() => null)
         let delayMsg: string
         if (shift && shift.deltaDays < 0) {
           // PM gave a date earlier than the current Gantt end — job is tracking ahead.
@@ -150,7 +151,7 @@ export function registerPmCheckinReplyHandler(): void {
       }
 
       if (parsed.status === 'confirmed') {
-        const confirmMsg = `Got it, thanks! Logged as on track for the *${thread.checkin_stage}* stage.`
+        const confirmMsg = `Got it, thanks! Logged *${taskRef}* as on track.`
         await postInThread(thread.slack_channel_id, threadTs, confirmMsg)
         updatedHistory.push({ role: 'agent', content: confirmMsg })
       }
