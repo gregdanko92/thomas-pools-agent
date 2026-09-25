@@ -353,74 +353,63 @@ function mapOrgTask(raw: Record<string, unknown>): OrgTask {
   }
 }
 
-// Fetches org tasks whose name starts with `prefix` and endDate falls in [from, to].
-// The combined AND filter keeps each bucket well under the 10-result cap.
-async function fetchOrgTasksInWindowByPrefix(prefix: string, from: string, to: string): Promise<OrgTask[]> {
+// Fetches tasks for a single job with endDate in [from, to], bundling job metadata
+// into each returned OrgTask. One request per job — stays well under the 10-result
+// cap because the window is narrow (tasks in a 5-day window per job is rarely > 10).
+async function fetchJobTasksInWindow(jobId: string, from: string, to: string): Promise<OrgTask[]> {
   const data = await pave({
-    organization: {
-      $: { id: orgId() },
+    job: {
+      $: { id: jobId },
+      id: true,
+      name: true,
+      location: { id: true, name: true, address: true },
+      customFieldValues: { nodes: { value: true, customField: { id: true } } },
       tasks: {
-        $: { where: { and: [['name', 'like', `${prefix}%`], ['endDate', '>=', from], ['endDate', '<=', to]] } },
+        $: { where: { and: [['endDate', '>=', from], ['endDate', '<=', to]] } },
         nodes: {
           id: true,
           name: true,
           isToDo: true,
           startDate: true,
           endDate: true,
-          job: {
-            id: true,
-            name: true,
-            location: { id: true, name: true, address: true },
-            customFieldValues: {
-              nodes: { value: true, customField: { id: true } },
-            },
-          },
         },
       },
     },
   })
-  const org = data.organization as Record<string, unknown> | null
-  if (!org) return []
-  const nodes = (org.tasks as { nodes: Array<Record<string, unknown>> }).nodes ?? []
-  return nodes.map(mapOrgTask)
+  const job = data.job as Record<string, unknown> | null
+  if (!job) return []
+  const taskNodes = (job.tasks as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+  const jobStage = extractStage(job)
+  const jobPm = extractPm(job)
+  const jobLocation = (job.location as JobLocation | null) ?? null
+  return taskNodes.map(t => ({
+    id: t.id as string,
+    name: t.name as string,
+    isToDo: t.isToDo as boolean,
+    startDate: (t.startDate as string | null) ?? null,
+    endDate: (t.endDate as string | null) ?? null,
+    jobId: job.id as string,
+    jobName: job.name as string,
+    jobStage,
+    jobPm,
+    jobLocation,
+  }))
 }
 
-// Recursively expands a prefix if it hits the 10-result cap (extremely rare with a
-// narrow date window — handled sequentially to avoid port exhaustion on Railway).
-async function expandOrgTasksPrefix(prefix: string, from: string, to: string): Promise<OrgTask[]> {
-  const batch = await fetchOrgTasksInWindowByPrefix(prefix, from, to)
-  if (batch.length < PAVE_PAGE_SIZE) return batch
-  const all = [...batch]
-  for (const c of CHARS) {
-    const sub = await expandOrgTasksPrefix(prefix + c, from, to)
-    all.push(...sub)
-  }
-  return all
-}
-
-// Lists all org tasks with endDate in [from, to] using a name-prefix scan.
-// Combines each prefix with AND date bounds so every bucket stays small —
-// works correctly regardless of Jobtread's 10-result-per-request cap.
-export async function listOrgTasksInWindow(from: string, to: string): Promise<OrgTask[]> {
-  const prefixes = [...CHARS, ...JOB_N_PREFIXES]
-  const seen = new Set<string>()
+// Lists tasks with endDate in [from, to] across the given jobs.
+// Queries each job individually with an AND date filter — one request per job,
+// no org-level cap issues, works correctly regardless of tasks-per-job count.
+export async function listJobTasksInWindow(jobIds: string[], from: string, to: string): Promise<OrgTask[]> {
   const all: OrgTask[] = []
-
   const CONCURRENCY = 2
   const BATCH_DELAY_MS = 300
-  for (let i = 0; i < prefixes.length; i += CONCURRENCY) {
+  for (let i = 0; i < jobIds.length; i += CONCURRENCY) {
     if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
     const results = await Promise.allSettled(
-      prefixes.slice(i, i + CONCURRENCY).map(p => expandOrgTasksPrefix(p, from, to)),
+      jobIds.slice(i, i + CONCURRENCY).map(id => fetchJobTasksInWindow(id, from, to)),
     )
     for (const result of results) {
-      if (result.status === 'rejected') continue
-      for (const task of result.value) {
-        if (!seen.has(task.id)) {
-          seen.add(task.id)
-          all.push(task)
-        }
-      }
+      if (result.status === 'fulfilled') all.push(...result.value)
     }
   }
   return all

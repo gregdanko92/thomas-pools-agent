@@ -1,5 +1,5 @@
 import cron from 'node-cron'
-import { listOrgTasksInWindow, STAGE_ORDER } from '../integrations/jobtread'
+import { listJobTasksInWindow, STAGE_ORDER } from '../integrations/jobtread'
 import type { OrgTask } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
@@ -77,9 +77,21 @@ export async function runPmCheckin(): Promise<void> {
 
   const activeStages = new Set(STAGE_ORDER.filter(s => s !== 'On Hold'))
 
-  // Prefix scan: all org tasks with endDate in [today, lookaheadCutoff].
-  // Each prefix bucket is combined with the AND date bounds — cap-proof.
-  const allTasks = await listOrgTasksInWindow(today, lookaheadCutoff)
+  // Fetch all channel-mapped jobs upfront — used both for job IDs (task query)
+  // and channel lookups (message routing).
+  const { data: channelRows, error } = await supabase
+    .from('project_channels')
+    .select('jobtread_job_id, slack_channel_id')
+
+  if (error) throw new Error(`Failed to fetch project_channels: ${error.message}`)
+
+  const channelByJobId = new Map(
+    (channelRows ?? []).map(r => [r.jobtread_job_id, r.slack_channel_id]),
+  )
+  const jobIds = [...channelByJobId.keys()]
+
+  // One request per job with AND date filter — cap-proof regardless of tasks per job.
+  const allTasks = await listJobTasksInWindow(jobIds, today, lookaheadCutoff)
 
   type JobGroup = {
     jobId: string
@@ -110,18 +122,6 @@ export async function runPmCheckin(): Promise<void> {
       })
     }
   }
-
-  // Fetch channel mappings for qualifying jobs in one query
-  const { data: channelRows, error } = await supabase
-    .from('project_channels')
-    .select('jobtread_job_id, slack_channel_id')
-    .in('jobtread_job_id', [...jobGroups.keys()])
-
-  if (error) throw new Error(`Failed to fetch project_channels: ${error.message}`)
-
-  const channelByJobId = new Map(
-    (channelRows ?? []).map(r => [r.jobtread_job_id, r.slack_channel_id]),
-  )
 
   const sent: string[] = []
   const nudgedThreadTs = new Set<string>()
