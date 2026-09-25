@@ -353,12 +353,14 @@ function mapOrgTask(raw: Record<string, unknown>): OrgTask {
   }
 }
 
-async function fetchOrgTasksByPrefix(prefix: string): Promise<OrgTask[]> {
+// Fetches org tasks whose name starts with `prefix` and endDate falls in [from, to].
+// The combined AND filter keeps each bucket well under the 10-result cap.
+async function fetchOrgTasksInWindowByPrefix(prefix: string, from: string, to: string): Promise<OrgTask[]> {
   const data = await pave({
     organization: {
       $: { id: orgId() },
       tasks: {
-        $: { where: ['name', 'like', `${prefix}%`] },
+        $: { where: { and: [['name', 'like', `${prefix}%`], ['endDate', '>=', from], ['endDate', '<=', to]] } },
         nodes: {
           id: true,
           name: true,
@@ -383,33 +385,33 @@ async function fetchOrgTasksByPrefix(prefix: string): Promise<OrgTask[]> {
   return nodes.map(mapOrgTask)
 }
 
-async function expandOrgTaskPrefix(prefix: string, concurrency = 2, delayMs = 300): Promise<OrgTask[]> {
-  const batch = await fetchOrgTasksByPrefix(prefix)
+// Recursively expands a prefix if it hits the 10-result cap (extremely rare with a
+// narrow date window — handled sequentially to avoid port exhaustion on Railway).
+async function expandOrgTasksPrefix(prefix: string, from: string, to: string): Promise<OrgTask[]> {
+  const batch = await fetchOrgTasksInWindowByPrefix(prefix, from, to)
   if (batch.length < PAVE_PAGE_SIZE) return batch
   const all = [...batch]
-  for (let i = 0; i < CHARS.length; i += concurrency) {
-    if (i > 0) await new Promise(r => setTimeout(r, delayMs))
-    const results = await Promise.allSettled(
-      CHARS.slice(i, i + concurrency).map(c => expandOrgTaskPrefix(prefix + c, concurrency, delayMs)),
-    )
-    for (const r of results) {
-      if (r.status === 'fulfilled') all.push(...r.value)
-    }
+  for (const c of CHARS) {
+    const sub = await expandOrgTasksPrefix(prefix + c, from, to)
+    all.push(...sub)
   }
   return all
 }
 
-// Scans all tasks across the org by name prefix. Slow but complete — use for
-// scheduled cron work where accuracy matters more than latency.
-export async function listAllOrgTasks(): Promise<OrgTask[]> {
+// Lists all org tasks with endDate in [from, to] using a name-prefix scan.
+// Combines each prefix with AND date bounds so every bucket stays small —
+// works correctly regardless of Jobtread's 10-result-per-request cap.
+export async function listOrgTasksInWindow(from: string, to: string): Promise<OrgTask[]> {
+  const prefixes = [...CHARS, ...JOB_N_PREFIXES]
   const seen = new Set<string>()
   const all: OrgTask[] = []
-  const CONCURRENCY = 1
+
+  const CONCURRENCY = 2
   const BATCH_DELAY_MS = 300
-  for (let i = 0; i < CHARS.length; i += CONCURRENCY) {
+  for (let i = 0; i < prefixes.length; i += CONCURRENCY) {
     if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
     const results = await Promise.allSettled(
-      CHARS.slice(i, i + CONCURRENCY).map(c => expandOrgTaskPrefix(c, CONCURRENCY, BATCH_DELAY_MS)),
+      prefixes.slice(i, i + CONCURRENCY).map(p => expandOrgTasksPrefix(p, from, to)),
     )
     for (const result of results) {
       if (result.status === 'rejected') continue
