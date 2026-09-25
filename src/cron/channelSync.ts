@@ -105,7 +105,12 @@ export async function runChannelSync(): Promise<void> {
     const job = candidates[0]
     const { error: insertErr } = await supabase
       .from('project_channels')
-      .insert({ slack_channel_id: ch.id, slack_channel_name: ch.name, jobtread_job_id: job.id })
+      .insert({
+        slack_channel_id: ch.id,
+        slack_channel_name: ch.name,
+        jobtread_job_id: job.id,
+        jobtread_job_name: job.name,
+      })
 
     if (insertErr) {
       // Duplicate key = another run already inserted this row; not an error.
