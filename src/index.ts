@@ -9,6 +9,7 @@ import { startVendorOutreach, runVendorOutreach } from './cron/vendorOutreach'
 import { startCalendarSync, runCalendarSync } from './cron/calendarSync'
 import { startPaymentReminders, runPaymentReminders } from './cron/paymentReminders'
 import { startPmCheckin, runPmCheckin } from './cron/pmCheckin'
+import { startChannelSync, runChannelSync } from './cron/channelSync'
 import { postErrorAlert } from './lib/errorAlert'
 import { withLock } from './lib/cronLock'
 
@@ -90,6 +91,18 @@ server.post('/cron/pm-checkin', async (req, reply) => {
   return reply.status(202).send({ triggered: true })
 })
 
+server.post('/cron/channel-sync', async (req, reply) => {
+  const secret = process.env.CRON_SECRET
+  if (secret && req.headers['x-cron-secret'] !== secret) {
+    return reply.status(401).send({ error: 'unauthorized' })
+  }
+  withLock('channel-sync', () => runChannelSync()).catch(async err => {
+    server.log.error({ err }, 'manual channel sync failed')
+    await postErrorAlert('channel-sync:manual', err)
+  })
+  return reply.status(202).send({ triggered: true })
+})
+
 const start = async () => {
   try {
     registerStatusCommand()
@@ -100,6 +113,7 @@ const start = async () => {
     startCalendarSync()
     startPaymentReminders()
     startPmCheckin()
+    startChannelSync()
     const port = Number(process.env.PORT) || 3000
     await server.listen({ port, host: '0.0.0.0' })
     await startSlackApp()
