@@ -404,7 +404,7 @@ async function expandOrgTaskPrefix(prefix: string, concurrency = 2, delayMs = 30
 export async function listAllOrgTasks(): Promise<OrgTask[]> {
   const seen = new Set<string>()
   const all: OrgTask[] = []
-  const CONCURRENCY = 2
+  const CONCURRENCY = 1
   const BATCH_DELAY_MS = 300
   for (let i = 0; i < CHARS.length; i += CONCURRENCY) {
     if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))

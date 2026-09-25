@@ -1,6 +1,6 @@
 import cron from 'node-cron'
-import { listJobs, getJobTasks, STAGE_ORDER } from '../integrations/jobtread'
-import type { Task } from '../integrations/jobtread'
+import { listAllOrgTasks, STAGE_ORDER } from '../integrations/jobtread'
+import type { OrgTask } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
@@ -32,7 +32,7 @@ function isDeadlineEve(endDate: string, today: string): boolean {
   return today === d.toISOString().slice(0, 10) || today === effectiveDeadline
 }
 
-function taskDateLabel(task: Task): string | null {
+function taskDateLabel(task: OrgTask): string | null {
   if (task.startDate && task.endDate && task.startDate !== task.endDate) {
     return `${task.startDate} – ${task.endDate}`
   }
@@ -75,30 +75,47 @@ export async function runPmCheckin(): Promise<void> {
   const COOLDOWN_DAYS = 2
   const lookaheadCutoff = addDays(today, LOOKAHEAD_DAYS)
 
-  const activeStages = STAGE_ORDER.filter(s => s !== 'On Hold')
-  const jobs = await listJobs({ stages: activeStages })
-  const jobsWithPm = jobs.filter(j => j.stage && j.pm && (!pilotPms || pilotPms.has(j.pm)))
+  const activeStages = new Set(STAGE_ORDER.filter(s => s !== 'On Hold'))
 
-  // Fetch tasks per job in small batches to avoid Jobtread rate limiting
-  const CONCURRENCY = 2
-  const BATCH_DELAY_MS = 300
-  const jobTaskPairs: Array<{ job: typeof jobsWithPm[0]; windowTasks: Task[] }> = []
-  for (let i = 0; i < jobsWithPm.length; i += CONCURRENCY) {
-    if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
-    const batch = await Promise.all(jobsWithPm.slice(i, i + CONCURRENCY).map(async job => {
-      const tasks = await getJobTasks(job.id)
-      const windowTasks = tasks.filter(t => t.endDate && t.endDate >= today && t.endDate <= lookaheadCutoff)
-      return { job, windowTasks }
-    }))
-    jobTaskPairs.push(...batch)
+  // Scan all org tasks and group those ending in the lookahead window by job
+  const allTasks = await listAllOrgTasks()
+
+  type JobGroup = {
+    jobId: string
+    jobName: string
+    jobStage: string
+    jobPm: string
+    jobLocation: { address: string | null } | null
+    windowTasks: OrgTask[]
+  }
+  const jobGroups = new Map<string, JobGroup>()
+
+  for (const task of allTasks) {
+    if (!task.endDate || task.endDate < today || task.endDate > lookaheadCutoff) continue
+    if (!task.jobStage || !activeStages.has(task.jobStage)) continue
+    if (!task.jobPm) continue
+    if (pilotPms && !pilotPms.has(task.jobPm)) continue
+
+    const existing = jobGroups.get(task.jobId)
+    if (existing) {
+      existing.windowTasks.push(task)
+    } else {
+      jobGroups.set(task.jobId, {
+        jobId: task.jobId,
+        jobName: task.jobName,
+        jobStage: task.jobStage,
+        jobPm: task.jobPm,
+        jobLocation: task.jobLocation,
+        windowTasks: [task],
+      })
+    }
   }
 
   // Fetch channel mappings for qualifying jobs in one query
-  const qualifyingJobIds = jobTaskPairs.filter(p => p.windowTasks.length > 0).map(p => p.job.id)
   const { data: channelRows, error } = await supabase
     .from('project_channels')
     .select('jobtread_job_id, slack_channel_id')
-    .in('jobtread_job_id', qualifyingJobIds)
+    .in('jobtread_job_id', [...jobGroups.keys()])
 
   if (error) throw new Error(`Failed to fetch project_channels: ${error.message}`)
 
@@ -110,18 +127,16 @@ export async function runPmCheckin(): Promise<void> {
   const nudgedThreadTs = new Set<string>()
   const skipped: string[] = []
 
-  for (const { job, windowTasks } of jobTaskPairs) {
-    if (windowTasks.length === 0) continue
-
-    const channelId = channelByJobId.get(job.id)
+  for (const { jobId, jobName: rawJobName, jobStage, jobPm, jobLocation, windowTasks } of jobGroups.values()) {
+    const channelId = channelByJobId.get(jobId)
     if (!channelId) {
-      skipped.push(`${job.name} — no channel mapping`)
+      skipped.push(`${rawJobName} — no channel mapping`)
       continue
     }
 
     const targetChannel = testMode ? testChannelId! : channelId
-    const jobName = displayName(job.name, job.location)
-    const pmUserId = testMode ? null : await lookupUserByName(job.pm!)
+    const jobName = displayName(rawJobName, jobLocation)
+    const pmUserId = testMode ? null : await lookupUserByName(jobPm)
 
     for (const task of windowTasks) {
       // Rule 1 — open thread: nudge if pending thread exists for this task from a prior day
@@ -136,7 +151,7 @@ export async function runPmCheckin(): Promise<void> {
 
       if (pendingThread) {
         if (pendingThread.checkin_date === today) {
-          skipped.push(`${job.name} / ${task.name} — pending thread from today`)
+          skipped.push(`${rawJobName} / ${task.name} — pending thread from today`)
           continue
         }
         const nudgeChannel = testMode ? testChannelId! : pendingThread.slack_channel_id
@@ -161,33 +176,33 @@ export async function runPmCheckin(): Promise<void> {
           .maybeSingle()
 
         if (recentResolved) {
-          skipped.push(`${job.name} / ${task.name} — resolved within last ${COOLDOWN_DAYS} days`)
+          skipped.push(`${rawJobName} / ${task.name} — resolved within last ${COOLDOWN_DAYS} days`)
           continue
         }
       }
 
       // All rules passed — send a fresh check-in for this task
       const dateLabel = taskDateLabel(task)
-      const targetLabel = `${job.pm} in #${channelId}`
-      const text = buildCheckinMessage(jobName, task.name, job.pm!, pmUserId, dateLabel, testMode, targetLabel)
+      const targetLabel = `${jobPm} in #${channelId}`
+      const text = buildCheckinMessage(jobName, task.name, jobPm, pmUserId, dateLabel, testMode, targetLabel)
       const threadTs = await postMessageWithTs(targetChannel, text)
 
       await supabase.from('pm_checkin_threads').upsert({
         thread_ts: threadTs,
         slack_channel_id: targetChannel,
-        jobtread_job_id: job.id,
+        jobtread_job_id: jobId,
         jobtread_job_name: jobName,
         jobtread_task_id: task.id,
         task_name: task.name,
-        pm_name: job.pm!,
+        pm_name: jobPm,
         pm_slack_user_id: pmUserId ?? '',
-        checkin_stage: job.stage!,
+        checkin_stage: jobStage,
         conversation_history: [{ role: 'agent', content: text }],
         status: 'pending',
         checkin_date: today,
       }, { onConflict: 'thread_ts' })
 
-      sent.push(`${job.name} / ${task.name}`)
+      sent.push(`${rawJobName} / ${task.name}`)
     }
   }
 
