@@ -79,12 +79,19 @@ export async function runPmCheckin(): Promise<void> {
   const jobs = await listJobs({ stages: activeStages })
   const jobsWithPm = jobs.filter(j => j.stage && j.pm && (!pilotPms || pilotPms.has(j.pm)))
 
-  // Fetch all tasks per job in parallel
-  const jobTaskPairs = await Promise.all(jobsWithPm.map(async job => {
-    const tasks = await getJobTasks(job.id)
-    const windowTasks = tasks.filter(t => t.endDate && t.endDate >= today && t.endDate <= lookaheadCutoff)
-    return { job, windowTasks }
-  }))
+  // Fetch tasks per job in small batches to avoid Jobtread rate limiting
+  const CONCURRENCY = 2
+  const BATCH_DELAY_MS = 300
+  const jobTaskPairs: Array<{ job: typeof jobsWithPm[0]; windowTasks: Task[] }> = []
+  for (let i = 0; i < jobsWithPm.length; i += CONCURRENCY) {
+    if (i > 0) await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
+    const batch = await Promise.all(jobsWithPm.slice(i, i + CONCURRENCY).map(async job => {
+      const tasks = await getJobTasks(job.id)
+      const windowTasks = tasks.filter(t => t.endDate && t.endDate >= today && t.endDate <= lookaheadCutoff)
+      return { job, windowTasks }
+    }))
+    jobTaskPairs.push(...batch)
+  }
 
   // Fetch channel mappings for qualifying jobs in one query
   const qualifyingJobIds = jobTaskPairs.filter(p => p.windowTasks.length > 0).map(p => p.job.id)
