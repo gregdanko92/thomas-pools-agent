@@ -10,6 +10,7 @@ import { startCalendarSync, runCalendarSync } from './cron/calendarSync'
 import { startPaymentReminders, runPaymentReminders } from './cron/paymentReminders'
 import { startPmCheckin, runPmCheckin } from './cron/pmCheckin'
 import { startChannelSync, runChannelSync } from './cron/channelSync'
+import { startScheduleNudge, runScheduleNudge } from './cron/scheduleNudge'
 import { postErrorAlert } from './lib/errorAlert'
 import { withLock } from './lib/cronLock'
 
@@ -103,6 +104,18 @@ server.post('/cron/channel-sync', async (req, reply) => {
   return reply.status(202).send({ triggered: true })
 })
 
+server.post('/cron/schedule-nudge', async (req, reply) => {
+  const secret = process.env.CRON_SECRET
+  if (secret && req.headers['x-cron-secret'] !== secret) {
+    return reply.status(401).send({ error: 'unauthorized' })
+  }
+  withLock('schedule-nudge', () => runScheduleNudge()).catch(async err => {
+    server.log.error({ err }, 'manual schedule nudge failed')
+    await postErrorAlert('schedule-nudge:manual', err)
+  })
+  return reply.status(202).send({ triggered: true })
+})
+
 const start = async () => {
   try {
     registerStatusCommand()
@@ -114,6 +127,7 @@ const start = async () => {
     startPaymentReminders()
     startPmCheckin()
     startChannelSync()
+    startScheduleNudge()
     const port = Number(process.env.PORT) || 3000
     await server.listen({ port, host: '0.0.0.0' })
     await startSlackApp()
