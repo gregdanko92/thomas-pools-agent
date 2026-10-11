@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import { listJobTasksInWindow, STAGE_ORDER } from '../integrations/jobtread'
 import type { OrgTask } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
+import { displayName } from '../lib/jobDisplay'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
@@ -40,9 +41,6 @@ function taskDateLabel(task: OrgTask): string | null {
   return null
 }
 
-function displayName(jobName: string, location: { address: string | null } | null): string {
-  return /^job\s/i.test(jobName) && location?.address ? location.address : jobName
-}
 
 function buildCheckinMessage(
   jobName: string,

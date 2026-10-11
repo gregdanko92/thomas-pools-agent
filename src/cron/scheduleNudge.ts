@@ -1,16 +1,23 @@
 import cron from 'node-cron'
-import { listJobs, getJobTasks, STAGE_ORDER } from '../integrations/jobtread'
+import { listJobs, getJobTasks } from '../integrations/jobtread'
 import { postMessage, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { displayName } from '../lib/jobDisplay'
 
 const TZ = 'America/Los_Angeles'
-const ACTIVE_STAGES = new Set(STAGE_ORDER.filter(s => s !== 'Sold'))
-
-function displayName(jobName: string, location: { address: string | null } | null): string {
-  return /^job\s/i.test(jobName) && location?.address ? location.address : jobName
-}
+const ACTIVE_STAGES = new Set([
+  'Engineering / Permitting',
+  'Excavation',
+  'Steel',
+  'Plumbing / Electric',
+  'Gunnite',
+  'Coping / Tile',
+  'Hardscape / Landscape',
+  'Fence & Gate',
+  'Plaster',
+])
 
 export async function runScheduleNudge(): Promise<void> {
   const testMode = process.env.SLACK_TEST_MODE === 'true'
@@ -36,8 +43,14 @@ export async function runScheduleNudge(): Promise<void> {
     channelByJobId.has(j.id) && j.stage !== null && ACTIVE_STAGES.has(j.stage),
   )
 
-  const reaganUserId = await lookupUserByName('Reagan')
-  const reaganRef = reaganUserId && !testMode ? `<@${reaganUserId}>` : 'Reagan'
+  const nudgeRecipient = process.env.SCHEDULE_NUDGE_RECIPIENT ?? 'Reagan'
+  let nudgeUserId: string | null = null
+  try {
+    nudgeUserId = await lookupUserByName(nudgeRecipient)
+  } catch {
+    // fall back to plain name; cron continues
+  }
+  const reaganRef = nudgeUserId && !testMode ? `<@${nudgeUserId}>` : nudgeRecipient
 
   const nudged: string[] = []
   const skipped: string[] = []
@@ -71,8 +84,12 @@ export async function runScheduleNudge(): Promise<void> {
       const body = `${reaganRef}, *${jobLabel}* doesn't have any tasks in Jobtread yet. Can you add a schedule for this job?`
       const text = testMode ? `[TEST MODE — Intended Target: Reagan in #${channelId}]\n${body}` : body
 
-      await postMessage(targetChannel, text)
-      nudged.push(job.name)
+      try {
+        await postMessage(targetChannel, text)
+        nudged.push(job.name)
+      } catch (err) {
+        skipped.push(`${job.name} — post error: ${err}`)
+      }
     }
   }
 
