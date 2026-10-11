@@ -125,6 +125,70 @@ export async function shiftTaskGantt(jobId: string, taskId: string, newDate: str
   )
 }
 
+// Shift every future task on a job by a fixed number of days, regardless of dependency links.
+// Used when the PM explicitly says "shift everything X days".
+export async function shiftAllByDays(jobId: string, days: number): Promise<ShiftResult> {
+  if (days <= 0) return { deltaDays: days, shiftedTasks: 0, shiftedEvents: 0 }
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
+  const tasks = await getJobTasks(jobId)
+
+  const futureTasks = tasks.filter(t => t.endDate != null && t.endDate >= today)
+  if (futureTasks.length === 0) return { deltaDays: days, shiftedTasks: 0, shiftedEvents: 0 }
+
+  const taskUpdates = new Map<string, { newStart: string | null; newEnd: string }>()
+
+  for (const task of futureTasks) {
+    const newEnd = addDays(task.endDate!, days)
+    // Shift start only if it's still in the future; leave in-progress start dates alone.
+    const newStart = task.startDate && task.startDate >= today
+      ? addDays(task.startDate, days)
+      : task.startDate ?? null
+    taskUpdates.set(task.id, { newStart, newEnd })
+  }
+
+  for (const [taskId, { newStart, newEnd }] of taskUpdates) {
+    const task = tasks.find(t => t.id === taskId)!
+    const input: Parameters<typeof updateTask>[1] = { endDate: newEnd }
+    if (newStart !== task.startDate) input.startDate = newStart ?? undefined
+    await updateTask(taskId, input)
+  }
+
+  const { data: syncRows } = await supabase
+    .from('calendar_sync')
+    .select('jobtread_task_id, google_event_id')
+    .in('jobtread_task_id', [...taskUpdates.keys()])
+
+  let shiftedEvents = 0
+  for (const row of syncRows ?? []) {
+    const update = taskUpdates.get(row.jobtread_task_id)
+    if (!update) continue
+    await new Promise(r => setTimeout(r, 200))
+    try {
+      await updateEvent(row.google_event_id, {
+        end: update.newEnd,
+        ...(update.newStart ? { start: update.newStart } : {}),
+      })
+      await supabase
+        .from('calendar_sync')
+        .update({
+          task_start: update.newStart,
+          task_end: update.newEnd,
+          last_synced_at: new Date().toISOString(),
+        })
+        .eq('jobtread_task_id', row.jobtread_task_id)
+      shiftedEvents++
+    } catch (err) {
+      console.error(
+        `[shift-gantt] Failed to update calendar event ${row.google_event_id}:`,
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
+
+  return { deltaDays: days, shiftedTasks: taskUpdates.size, shiftedEvents }
+}
+
 // Shift all tasks in a stage and cascade to dependents.
 // Used as fallback for legacy threads without a task ID.
 export async function shiftJobGantt(jobId: string, newCompletionDate: string, stage?: string): Promise<ShiftResult> {
