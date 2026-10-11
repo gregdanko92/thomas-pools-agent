@@ -21,8 +21,12 @@ Respond with a JSON object:
   "summary": "one sentence summary of the PM's response for the Jobtread comment",
   "followup": "follow-up question to ask in Slack thread if status is needs_clarification, otherwise null",
   "newDate": "YYYY-MM-DD of the new expected completion date if status is delayed_with_date, otherwise null",
-  "shiftDays": "integer number of days to shift if status is shift_all, otherwise null"
+  "shiftDays": <number of days to shift as a JSON integer (e.g. 5, not "5") if status is shift_all, otherwise null>
 }`
+
+// Upper bound on a single "shift everything" request, to guard against a misparsed reply
+// (e.g. "a month" read as 300) rescheduling an entire job.
+const MAX_SHIFT_ALL_DAYS = 60
 
 interface ParsedReply {
   status: 'confirmed' | 'delayed_with_date' | 'delayed_no_date' | 'needs_clarification' | 'shift_all'
@@ -107,10 +111,21 @@ export function registerPmCheckinReplyHandler(): void {
         parsed.status = 'delayed_no_date'
       }
 
-      // If the LLM classified as shift_all but couldn't extract a day count, ask for it.
-      if (parsed.status === 'shift_all' && !(parsed.shiftDays && parsed.shiftDays > 0)) {
-        parsed.status = 'needs_clarification'
-        parsed.followup = 'Got it — how many days should I shift the entire schedule?'
+      // The LLM may return shiftDays as a string ("5"); string math in addDays would
+      // concatenate instead of add, so coerce and validate before anything uses it.
+      if (parsed.status === 'shift_all') {
+        const days = Number(parsed.shiftDays)
+        if (!Number.isInteger(days) || days <= 0) {
+          parsed.status = 'needs_clarification'
+          parsed.followup = 'Got it — how many days should I shift the entire schedule?'
+          parsed.shiftDays = null
+        } else if (days > MAX_SHIFT_ALL_DAYS) {
+          parsed.status = 'needs_clarification'
+          parsed.followup = `That's more than ${MAX_SHIFT_ALL_DAYS} days — I can only shift the whole schedule up to ${MAX_SHIFT_ALL_DAYS} days at a time. How many days should I shift it?`
+          parsed.shiftDays = null
+        } else {
+          parsed.shiftDays = days
+        }
       }
 
       // Threads that need more info — keep open, ask follow-up, don't resolve yet
@@ -161,11 +176,18 @@ export function registerPmCheckinReplyHandler(): void {
       }
 
       if (parsed.status === 'shift_all' && parsed.shiftDays) {
-        const shift = await shiftAllByDays(thread.jobtread_job_id, parsed.shiftDays).catch(() => null)
-        const ganttNote = shift && shift.shiftedTasks > 0
-          ? ` Shifted all ${shift.shiftedTasks} task${shift.shiftedTasks !== 1 ? 's' : ''} by ${parsed.shiftDays} day${parsed.shiftDays !== 1 ? 's' : ''}.`
-          : ''
-        const shiftMsg = `Got it — shifting the entire schedule by ${parsed.shiftDays} day${parsed.shiftDays !== 1 ? 's' : ''}.${ganttNote}`
+        const days = parsed.shiftDays
+        const dayLabel = `${days} day${days !== 1 ? 's' : ''}`
+        let shiftMsg: string
+        try {
+          const shift = await shiftAllByDays(thread.jobtread_job_id, days)
+          shiftMsg = shift.shiftedTasks > 0
+            ? `Got it — shifted all ${shift.shiftedTasks} upcoming task${shift.shiftedTasks !== 1 ? 's' : ''} by ${dayLabel}.`
+            : `Got it — but there are no upcoming tasks on the schedule to shift, so nothing was changed.`
+        } catch (err) {
+          await postErrorAlert('pm-checkin-shift-all', err)
+          shiftMsg = `Sorry — I hit an error shifting the schedule by ${dayLabel}. Some tasks may not have moved; please check the schedule in Jobtread.`
+        }
         await postInThread(thread.slack_channel_id, threadTs, shiftMsg)
         updatedHistory.push({ role: 'agent', content: shiftMsg })
       }
