@@ -3,7 +3,7 @@ import { createComment } from '../integrations/jobtread'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
-import { shiftJobGantt, shiftTaskGantt } from './shiftGantt'
+import { shiftJobGantt, shiftTaskGantt, shiftAllByDays } from './shiftGantt'
 
 const SYSTEM_PROMPT = `You are an assistant managing construction project check-ins for Thomas Pools.
 A project manager has replied to a status check-in about a specific task on a job.
@@ -13,20 +13,27 @@ Classify the reply as one of:
 - "delayed_with_date" — PM indicates a delay and provides a new expected completion date or timeframe
 - "delayed_no_date" — PM indicates a delay but has no new timeline yet
 - "needs_clarification" — the reply is ambiguous and you need to ask a follow-up question
+- "shift_all" — PM says to shift the entire project schedule by a number of days (e.g. "push everything back 5 days", "shift the whole schedule a week", "move everything 3 days")
 
 Respond with a JSON object:
 {
-  "status": "confirmed" | "delayed_with_date" | "delayed_no_date" | "needs_clarification",
+  "status": "confirmed" | "delayed_with_date" | "delayed_no_date" | "needs_clarification" | "shift_all",
   "summary": "one sentence summary of the PM's response for the Jobtread comment",
   "followup": "follow-up question to ask in Slack thread if status is needs_clarification, otherwise null",
-  "newDate": "YYYY-MM-DD of the new expected completion date if status is delayed_with_date, otherwise null"
+  "newDate": "YYYY-MM-DD of the new expected completion date if status is delayed_with_date, otherwise null",
+  "shiftDays": <number of days to shift as a JSON integer (e.g. 5, not "5") if status is shift_all, otherwise null>
 }`
 
+// Upper bound on a single "shift everything" request, to guard against a misparsed reply
+// (e.g. "a month" read as 300) rescheduling an entire job.
+const MAX_SHIFT_ALL_DAYS = 60
+
 interface ParsedReply {
-  status: 'confirmed' | 'delayed_with_date' | 'delayed_no_date' | 'needs_clarification'
+  status: 'confirmed' | 'delayed_with_date' | 'delayed_no_date' | 'needs_clarification' | 'shift_all'
   summary: string
   followup: string | null
   newDate: string | null
+  shiftDays: number | null
 }
 
 async function parseReply(
@@ -53,6 +60,7 @@ async function parseReply(
       summary: pmReply,
       followup: 'Could you clarify — is the current stage on track or is there a delay?',
       newDate: null,
+      shiftDays: null,
     }
   }
 }
@@ -103,6 +111,23 @@ export function registerPmCheckinReplyHandler(): void {
         parsed.status = 'delayed_no_date'
       }
 
+      // The LLM may return shiftDays as a string ("5"); string math in addDays would
+      // concatenate instead of add, so coerce and validate before anything uses it.
+      if (parsed.status === 'shift_all') {
+        const days = Number(parsed.shiftDays)
+        if (!Number.isInteger(days) || days <= 0) {
+          parsed.status = 'needs_clarification'
+          parsed.followup = 'Got it — how many days should I shift the entire schedule?'
+          parsed.shiftDays = null
+        } else if (days > MAX_SHIFT_ALL_DAYS) {
+          parsed.status = 'needs_clarification'
+          parsed.followup = `That's more than ${MAX_SHIFT_ALL_DAYS} days — I can only shift the whole schedule up to ${MAX_SHIFT_ALL_DAYS} days at a time. How many days should I shift it?`
+          parsed.shiftDays = null
+        } else {
+          parsed.shiftDays = days
+        }
+      }
+
       // Threads that need more info — keep open, ask follow-up, don't resolve yet
       const needsFollowup =
         (parsed.status === 'needs_clarification' && parsed.followup) ||
@@ -150,19 +175,32 @@ export function registerPmCheckinReplyHandler(): void {
         updatedHistory.push({ role: 'agent', content: delayMsg })
       }
 
+      if (parsed.status === 'shift_all' && parsed.shiftDays) {
+        const days = parsed.shiftDays
+        const dayLabel = `${days} day${days !== 1 ? 's' : ''}`
+        let shiftMsg: string
+        try {
+          const shift = await shiftAllByDays(thread.jobtread_job_id, days)
+          shiftMsg = shift.shiftedTasks > 0
+            ? `Got it — shifted all ${shift.shiftedTasks} upcoming task${shift.shiftedTasks !== 1 ? 's' : ''} by ${dayLabel}.`
+            : `Got it — but there are no upcoming tasks on the schedule to shift, so nothing was changed.`
+        } catch (err) {
+          await postErrorAlert('pm-checkin-shift-all', err)
+          shiftMsg = `Sorry — I hit an error shifting the schedule by ${dayLabel}. Some tasks may not have moved; please check the schedule in Jobtread.`
+        }
+        await postInThread(thread.slack_channel_id, threadTs, shiftMsg)
+        updatedHistory.push({ role: 'agent', content: shiftMsg })
+      }
+
       if (parsed.status === 'confirmed') {
         const confirmMsg = `Got it, thanks! Logged *${taskRef}* as on track.`
         await postInThread(thread.slack_channel_id, threadTs, confirmMsg)
         updatedHistory.push({ role: 'agent', content: confirmMsg })
       }
 
-      // For confirmed, the acknowledgement was already appended above.
-      // For delayed_with_date, the acknowledgement was appended in the delay block above.
-      const finalHistory = updatedHistory
-
       await supabase.from('pm_checkin_threads').update({
         status: parsed.status === 'confirmed' ? 'confirmed' : 'delayed',
-        conversation_history: finalHistory,
+        conversation_history: updatedHistory,
       }).eq('thread_ts', threadTs)
 
       await supabase.from('agent_run_log').insert({

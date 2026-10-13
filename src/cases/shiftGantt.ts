@@ -55,6 +55,15 @@ async function applyShift(
     }
   }
 
+  return persistShift(taskMap, taskUpdates, deltaDays)
+}
+
+// Write computed task date changes to Jobtread and sync linked Google Calendar events.
+async function persistShift(
+  taskMap: Map<string, Task>,
+  taskUpdates: Map<string, { newStart: string | null; newEnd: string }>,
+  deltaDays: number,
+): Promise<ShiftResult> {
   // Apply Jobtread updates
   for (const [taskId, { newStart, newEnd }] of taskUpdates) {
     const task = taskMap.get(taskId)!
@@ -123,6 +132,30 @@ export async function shiftTaskGantt(jobId: string, taskId: string, newDate: str
     deltaDays,
     today,
   )
+}
+
+// Shift every future task on a job by a fixed number of days, regardless of dependency links.
+// Used when the PM explicitly says "shift everything X days".
+export async function shiftAllByDays(jobId: string, days: number): Promise<ShiftResult> {
+  if (!Number.isInteger(days) || days <= 0) return { deltaDays: days, shiftedTasks: 0, shiftedEvents: 0 }
+
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: TZ })
+  const tasks = await getJobTasks(jobId)
+  const taskMap = new Map<string, Task>(tasks.map(t => [t.id, t]))
+
+  const taskUpdates = new Map<string, { newStart: string | null; newEnd: string }>()
+  for (const task of tasks) {
+    if (!task.endDate || task.endDate < today) continue
+    const newEnd = addDays(task.endDate, days)
+    // Shift start only if it's still in the future; leave in-progress start dates alone.
+    const newStart = task.startDate && task.startDate >= today
+      ? addDays(task.startDate, days)
+      : task.startDate ?? null
+    taskUpdates.set(task.id, { newStart, newEnd })
+  }
+
+  if (taskUpdates.size === 0) return { deltaDays: days, shiftedTasks: 0, shiftedEvents: 0 }
+  return persistShift(taskMap, taskUpdates, days)
 }
 
 // Shift all tasks in a stage and cascade to dependents.
