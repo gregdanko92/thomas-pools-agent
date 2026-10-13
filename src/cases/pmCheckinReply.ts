@@ -194,10 +194,18 @@ export function registerPmCheckinReplyHandler(): void {
       }
 
       if (parsed.status === 'completed') {
+        let completedMsg: string
         if (thread.jobtread_task_id) {
-          await completeTask(thread.jobtread_task_id).catch(() => undefined)
+          try {
+            await completeTask(thread.jobtread_task_id)
+            completedMsg = `Got it — marked *${taskRef}* as complete in Jobtread! ✅`
+          } catch (err) {
+            await postErrorAlert('pm-checkin-complete-task', err)
+            completedMsg = `Got it — logged *${taskRef}* as complete. (Heads up: I couldn't update the Jobtread checkmark — please mark it manually.)`
+          }
+        } else {
+          completedMsg = `Got it — logged *${taskRef}* as complete!`
         }
-        const completedMsg = `Got it — marked *${taskRef}* as complete in Jobtread! ✅`
         await postInThread(thread.slack_channel_id, threadTs, completedMsg)
         updatedHistory.push({ role: 'agent', content: completedMsg })
       }
