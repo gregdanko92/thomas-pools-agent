@@ -606,6 +606,14 @@ export async function updateTask(taskId: string, input: UpdateTaskInput): Promis
   })
 }
 
+export async function completeTask(taskId: string): Promise<void> {
+  await pave({
+    updateTask: {
+      $: { id: taskId, completed: 1 },
+    },
+  })
+}
+
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {
   const data = await pave({
     createTask: {

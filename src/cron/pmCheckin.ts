@@ -168,7 +168,7 @@ export async function runPmCheckin(): Promise<void> {
           .from('pm_checkin_threads')
           .select('id')
           .eq('jobtread_task_id', task.id)
-          .in('status', ['confirmed', 'delayed'])
+          .in('status', ['confirmed', 'delayed', 'completed'])
           .gte('checkin_date', cooldownDate)
           .limit(1)
           .maybeSingle()
