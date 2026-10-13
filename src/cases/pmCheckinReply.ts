@@ -210,6 +210,7 @@ export function registerPmCheckinReplyHandler(): void {
         updatedHistory.push({ role: 'agent', content: completedMsg })
       }
 
+
       if (parsed.status === 'confirmed') {
         const confirmMsg = `Got it, thanks! Logged *${taskRef}* as on track.`
         await postInThread(thread.slack_channel_id, threadTs, confirmMsg)
