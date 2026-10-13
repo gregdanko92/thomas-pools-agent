@@ -1,5 +1,5 @@
 import { getApp, postInThread } from '../integrations/slack'
-import { createComment } from '../integrations/jobtread'
+import { createComment, completeTask } from '../integrations/jobtread'
 import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
@@ -9,7 +9,8 @@ const SYSTEM_PROMPT = `You are an assistant managing construction project check-
 A project manager has replied to a status check-in about a specific task on a job.
 
 Classify the reply as one of:
-- "confirmed" — PM says the task is on track, no issues
+- "completed" — PM says the task is done/finished/complete (e.g. "that's done", "all finished", "we completed that", "it's done", "done!")
+- "confirmed" — PM says the task is on track but not yet finished (e.g. "looks good", "on schedule", "no issues")
 - "delayed_with_date" — PM indicates a delay and provides a new expected completion date or timeframe
 - "delayed_no_date" — PM indicates a delay but has no new timeline yet
 - "needs_clarification" — the reply is ambiguous and you need to ask a follow-up question
@@ -17,7 +18,7 @@ Classify the reply as one of:
 
 Respond with a JSON object:
 {
-  "status": "confirmed" | "delayed_with_date" | "delayed_no_date" | "needs_clarification" | "shift_all",
+  "status": "completed" | "confirmed" | "delayed_with_date" | "delayed_no_date" | "needs_clarification" | "shift_all",
   "summary": "one sentence summary of the PM's response for the Jobtread comment",
   "followup": "follow-up question to ask in Slack thread if status is needs_clarification, otherwise null",
   "newDate": "YYYY-MM-DD of the new expected completion date if status is delayed_with_date, otherwise null",
@@ -29,7 +30,7 @@ Respond with a JSON object:
 const MAX_SHIFT_ALL_DAYS = 60
 
 interface ParsedReply {
-  status: 'confirmed' | 'delayed_with_date' | 'delayed_no_date' | 'needs_clarification' | 'shift_all'
+  status: 'completed' | 'confirmed' | 'delayed_with_date' | 'delayed_no_date' | 'needs_clarification' | 'shift_all'
   summary: string
   followup: string | null
   newDate: string | null
@@ -192,14 +193,26 @@ export function registerPmCheckinReplyHandler(): void {
         updatedHistory.push({ role: 'agent', content: shiftMsg })
       }
 
+      if (parsed.status === 'completed') {
+        if (thread.jobtread_task_id) {
+          await completeTask(thread.jobtread_task_id).catch(() => undefined)
+        }
+        const completedMsg = `Got it — marked *${taskRef}* as complete in Jobtread! ✅`
+        await postInThread(thread.slack_channel_id, threadTs, completedMsg)
+        updatedHistory.push({ role: 'agent', content: completedMsg })
+      }
+
       if (parsed.status === 'confirmed') {
         const confirmMsg = `Got it, thanks! Logged *${taskRef}* as on track.`
         await postInThread(thread.slack_channel_id, threadTs, confirmMsg)
         updatedHistory.push({ role: 'agent', content: confirmMsg })
       }
 
+      const threadStatus = parsed.status === 'completed' || parsed.status === 'confirmed'
+        ? parsed.status
+        : 'delayed'
       await supabase.from('pm_checkin_threads').update({
-        status: parsed.status === 'confirmed' ? 'confirmed' : 'delayed',
+        status: threadStatus,
         conversation_history: updatedHistory,
       }).eq('thread_ts', threadTs)
 
