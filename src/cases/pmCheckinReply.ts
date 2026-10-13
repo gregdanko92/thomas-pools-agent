@@ -9,7 +9,7 @@ const SYSTEM_PROMPT = `You are an assistant managing construction project check-
 A project manager has replied to a status check-in about a specific task on a job.
 
 Classify the reply as one of:
-- "completed" — PM says the task is done/finished/complete (e.g. "that's done", "all finished", "we completed that", "it's done", "done!")
+- "completed" — PM says the task is done/finished/complete (e.g. "that's done", "all finished", "we completed that", "it's done", "done!", "ordered", "order placed", "it's been ordered", "placed the order", "order is in")
 - "confirmed" — PM says the task is on track but not yet finished (e.g. "looks good", "on schedule", "no issues")
 - "delayed_with_date" — PM indicates a delay and provides a new expected completion date or timeframe
 - "delayed_no_date" — PM indicates a delay but has no new timeline yet
