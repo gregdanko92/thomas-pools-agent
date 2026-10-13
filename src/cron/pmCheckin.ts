@@ -158,10 +158,13 @@ export async function runPmCheckin(): Promise<void> {
         continue
       }
 
-      // Rule 2 — cooldown: skip if resolved recently, unless deadline eve
+      // Rule 2 — cooldown: skip if resolved recently, unless deadline eve or order task
+      // Order tasks (name contains "order") bypass the cooldown so the PM is nudged
+      // every day until they confirm the order is placed.
+      const isOrderTask = task.name.toLowerCase().includes('order')
       const deadlineEve = isDeadlineEve(task.endDate!, today)
 
-      if (!deadlineEve) {
+      if (!deadlineEve && !isOrderTask) {
         const cooldownDate = new Date(Date.now() - COOLDOWN_DAYS * 86_400_000)
           .toLocaleDateString('en-CA', { timeZone: TZ })
         const { data: recentResolved } = await supabase
