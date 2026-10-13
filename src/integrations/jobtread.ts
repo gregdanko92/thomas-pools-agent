@@ -609,7 +609,7 @@ export async function updateTask(taskId: string, input: UpdateTaskInput): Promis
 export async function completeTask(taskId: string): Promise<void> {
   await pave({
     updateTask: {
-      $: { id: taskId, completed: 1 },
+      $: { id: taskId, completed: true },
     },
   })
 }
