@@ -3,6 +3,7 @@ import { sendSms } from '../integrations/twilio'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { cronsEnabled, isStaging } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
 
@@ -100,6 +101,9 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
     candidateCount = candidates.length
 
     const testPhone = process.env.VENDOR_OUTREACH_TEST_PHONE
+    if (isStaging() && !testPhone) {
+      throw new Error('[staging guard] VENDOR_OUTREACH_TEST_PHONE must be set in staging')
+    }
 
     for (const candidate of candidates) {
       const body = buildSmsBody(candidate)
@@ -164,6 +168,7 @@ export async function runVendorOutreach(): Promise<OutreachResult[]> {
 
 // Fires daily at 9 AM America/Los_Angeles — early enough to catch vendors before noon.
 export function startVendorOutreach(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 9 * * *', () => {
     withLock('vendor-outreach', () => runVendorOutreach()).catch(async err => {
       console.error('[vendor-outreach]', err instanceof Error ? err.message : err)

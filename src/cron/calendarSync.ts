@@ -5,6 +5,7 @@ import { createEvent, updateEvent } from '../integrations/googleCalendar'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { cronsEnabled, canWriteJob } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
 
@@ -50,7 +51,9 @@ export async function runCalendarSync(): Promise<CalendarSyncResult> {
   let updated = 0
   let errors = 0
 
-  const activeJobs = await listJobs({ stages: ACTIVE_STAGES })
+  // Creating/updating calendar events is a write, so in staging it is limited to the
+  // allowlisted test jobs even when JOBTREAD_STAGING_READ_ALL is on.
+  const activeJobs = (await listJobs({ stages: ACTIVE_STAGES })).filter(j => canWriteJob(j.id))
 
   // .in('col', []) behavior is undefined across PostgREST versions — some return all rows.
   if (activeJobs.length === 0) return { created: 0, updated: 0, errors: 0 }
@@ -167,6 +170,7 @@ export async function runCalendarSync(): Promise<CalendarSyncResult> {
 
 // Fires hourly — frequent enough to catch new Jobtread tasks within the hour they're added.
 export function startCalendarSync(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 * * * *', () => {
     withLock('calendar-sync', () => runCalendarSync()).then(result => {
       if (result && (result.created > 0 || result.updated > 0 || result.errors > 0)) {

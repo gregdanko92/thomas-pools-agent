@@ -6,6 +6,7 @@ import { withRetry } from '../lib/retry'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { cronsEnabled, isStaging } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
 
@@ -120,7 +121,8 @@ export async function runChannelSync(): Promise<void> {
       }
     } else {
       // Join the channel so the bot can post PM check-in messages to it.
-      await withRetry(() =>
+      // Staging never joins real job channels — it only posts to the test channel.
+      if (!isStaging()) await withRetry(() =>
         getApp().client.conversations.join({ channel: ch.id }),
       ).catch(err => {
         // already_in_channel is benign; surface any other join failure as a warning only
@@ -152,6 +154,7 @@ async function logRun(details: object): Promise<void> {
 
 // Fires daily at 6 AM PT
 export function startChannelSync(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 6 * * *', () => {
     withLock('channel-sync', () => runChannelSync()).catch(async err => {
       console.error('[channel-sync]', err instanceof Error ? err.message : err)

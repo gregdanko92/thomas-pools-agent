@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import Fastify from 'fastify'
-import { startSlackApp } from './integrations/slack'
+import { startSlackApp, getSlackAppId } from './integrations/slack'
 import { registerStatusCommand } from './cases/status'
 import { registerPmCheckinReplyHandler } from './cases/pmCheckinReply'
 import { startMorningHealthCheck, runMorningHealthCheck } from './cron/morningHealthCheck'
@@ -13,6 +13,7 @@ import { startChannelSync, runChannelSync } from './cron/channelSync'
 import { startScheduleNudge, runScheduleNudge } from './cron/scheduleNudge'
 import { postErrorAlert } from './lib/errorAlert'
 import { withLock } from './lib/cronLock'
+import { appEnv, assertSafeConfig, cronsEnabled } from './lib/env'
 
 const server = Fastify({ logger: true })
 
@@ -118,6 +119,9 @@ server.post('/cron/schedule-nudge', async (req, reply) => {
 
 const start = async () => {
   try {
+    // Refuse to start if e.g. staging is holding production credentials.
+    assertSafeConfig(await getSlackAppId())
+    server.log.info({ appEnv: appEnv(), cronsEnabled: cronsEnabled() }, 'environment check passed')
     registerStatusCommand()
     registerPmCheckinReplyHandler()
     startMorningHealthCheck()
