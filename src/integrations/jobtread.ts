@@ -15,9 +15,11 @@ export const STAGE_ORDER: string[] = [
   'Plumbing / Electric',
   'Gunnite',
   'Coping / Tile',
-  'Hardscape / Landscape',
+  'Hardscape',
   'Fence & Gate',
   'Plaster',
+  'Final',
+  'Landscape/Touch-Ups/Front Yard',
 ]
 
 export function nextStage(current: string): string | null {
@@ -35,7 +37,7 @@ export const STAGE_TASK_KEYWORDS: Record<string, string[]> = {
   'Plumbing / Electric': ['plumbing', 'electric'],
   'Gunnite': ['gunite', 'gunnite'],
   'Coping / Tile': ['coping', 'tile'],
-  'Hardscape / Landscape': ['hardscape', 'landscape'],
+  'Hardscape': ['hardscape', 'landscape'],
   'Fence & Gate': ['fence', 'gate'],
   'Plaster': ['plaster'],
 }

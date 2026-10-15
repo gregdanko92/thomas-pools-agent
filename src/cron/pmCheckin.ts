@@ -1,5 +1,5 @@
 import cron from 'node-cron'
-import { listJobTasksInWindow, STAGE_ORDER } from '../integrations/jobtread'
+import { listJobTasksInWindow } from '../integrations/jobtread'
 import type { OrgTask } from '../integrations/jobtread'
 import { postMessageWithTs, postInThread, lookupUserByName } from '../integrations/slack'
 import { displayName } from '../lib/jobDisplay'
@@ -9,6 +9,11 @@ import { withLock } from '../lib/cronLock'
 import { isStaging, cronsEnabled, testChannelId as getTestChannelId } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
+
+// The Gantt drives check-ins: any task due in the window gets one unless the job is
+// paused or closed out. An exclusion list (rather than an allowlist of active stages)
+// means a renamed or new Jobtread status can't silently switch check-ins off.
+const INACTIVE_STAGES = new Set(['On Hold', 'Completed', 'Lost'])
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr)
@@ -71,8 +76,6 @@ export async function runPmCheckin(): Promise<void> {
   const COOLDOWN_DAYS = 2
   const lookaheadCutoff = addDays(today, LOOKAHEAD_DAYS)
 
-  const activeStages = new Set(STAGE_ORDER.filter(s => s !== 'On Hold'))
-
   // Fetch all channel-mapped jobs upfront — used both for job IDs (task query)
   // and channel lookups (message routing).
   const { data: channelRows, error } = await supabase
@@ -100,7 +103,7 @@ export async function runPmCheckin(): Promise<void> {
   const jobGroups = new Map<string, JobGroup>()
 
   for (const task of allTasks) {
-    if (!task.jobStage || !activeStages.has(task.jobStage)) continue
+    if (task.jobStage && INACTIVE_STAGES.has(task.jobStage)) continue
     if (!task.jobPm) continue
     if (pilotPms && !pilotPms.has(task.jobPm)) continue
 
@@ -111,7 +114,7 @@ export async function runPmCheckin(): Promise<void> {
       jobGroups.set(task.jobId, {
         jobId: task.jobId,
         jobName: task.jobName,
-        jobStage: task.jobStage,
+        jobStage: task.jobStage ?? '',
         jobPm: task.jobPm,
         jobLocation: task.jobLocation,
         windowTasks: [task],

@@ -80,7 +80,10 @@ function buildPrompt(jobs: JobDetail[], checkins: Map<string, CheckinStatus>, un
       : job.name
 
     lines.push(`JOB: ${name}`)
-    lines.push(`Stage: ${job.stage ?? job.status} | PM: ${job.pm ?? 'UNASSIGNED'} | Next: ${job.stage ? (nextStage(job.stage) ?? 'Final') : 'unknown'}`)
+    const next = !job.stage
+      ? 'unknown'
+      : nextStage(job.stage) ?? (job.stage === STAGE_ORDER[STAGE_ORDER.length - 1] ? 'none (last stage)' : 'unknown')
+    lines.push(`Stage: ${job.stage ?? job.status} | PM: ${job.pm ?? 'UNASSIGNED'} | Next: ${next}`)
 
     if (unmapped.has(job.id)) lines.push('WARNING: No Slack channel mapped')
 
