@@ -1,12 +1,17 @@
 {
   "name": "thomas-pools-agent",
   "version": "1.0.0",
-  "description": "AI agent for Thomas Pools — project monitoring, vendor outreach, Slack/Jobtread sync",
+  "description": "AI agent for Thomas Pools \u2014 project monitoring, vendor outreach, Slack/Jobtread sync",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "staging:trigger": "npx tsx scripts/staging/trigger.ts",
+    "staging:reset-db": "npx tsx scripts/staging/reset-db.ts",
+    "staging:save-job": "npx tsx scripts/staging/job-baseline.ts save",
+    "staging:reset-job": "npx tsx scripts/staging/job-baseline.ts restore",
+    "dev:staging": "DOTENV_CONFIG_PATH=.env.staging npx tsx src/index.ts"
   },
   "repository": {
     "type": "git",

@@ -4,6 +4,7 @@ import { postMessage, lookupUserByName } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { isStaging, cronsEnabled, testChannelId as getTestChannelId } from '../lib/env'
 import { displayName } from '../lib/jobDisplay'
 
 const TZ = 'America/Los_Angeles'
@@ -20,12 +21,9 @@ const ACTIVE_STAGES = new Set([
 ])
 
 export async function runScheduleNudge(): Promise<void> {
-  const testMode = process.env.SLACK_TEST_MODE === 'true'
-  const testChannelId = process.env.SLACK_TEST_CHANNEL_ID
-
-  if (testMode && !testChannelId) {
-    throw new Error('SLACK_TEST_MODE is true but SLACK_TEST_CHANNEL_ID is not set')
-  }
+  // Staging reroutes every post to the test channel with an "intended target" header.
+  const testMode = isStaging()
+  const testChannelId = testMode ? getTestChannelId() : undefined
 
   const { data: channelRows, error } = await supabase
     .from('project_channels')
@@ -102,6 +100,7 @@ export async function runScheduleNudge(): Promise<void> {
 
 // Fires at 9 AM Mon–Fri
 export function startScheduleNudge(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 9 * * 1-5', () => {
     withLock('schedule-nudge', () => runScheduleNudge()).catch(async err => {
       console.error('[schedule-nudge]', err instanceof Error ? err.message : err)

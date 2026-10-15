@@ -6,6 +6,7 @@ import { displayName } from '../lib/jobDisplay'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { isStaging, cronsEnabled, testChannelId as getTestChannelId } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
 
@@ -58,12 +59,9 @@ function buildCheckinMessage(
 }
 
 export async function runPmCheckin(): Promise<void> {
-  const testMode = process.env.SLACK_TEST_MODE === 'true'
-  const testChannelId = process.env.SLACK_TEST_CHANNEL_ID
-
-  if (testMode && !testChannelId) {
-    throw new Error('SLACK_TEST_MODE is true but SLACK_TEST_CHANNEL_ID is not set')
-  }
+  // Staging reroutes every post to the test channel with an "intended target" header.
+  const testMode = isStaging()
+  const testChannelId = testMode ? getTestChannelId() : undefined
 
   const pilotPms = process.env.PILOT_PM
     ? new Set(process.env.PILOT_PM.split(',').map(s => s.trim()).filter(Boolean))
@@ -233,6 +231,7 @@ export async function runPmCheckin(): Promise<void> {
 
 // Fires at 4 PM Mon–Fri
 export function startPmCheckin(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 16 * * 1-5', () => {
     withLock('pm-checkin', () => runPmCheckin()).catch(async err => {
       console.error('[pm-checkin]', err instanceof Error ? err.message : err)

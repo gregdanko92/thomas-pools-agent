@@ -1,4 +1,5 @@
 import { withRetry } from '../lib/retry'
+import { isStaging, stagingReadAll, allowedJobIds, canReadJob, assertCanReadJob, assertCanWriteJob } from '../lib/env'
 
 const PAVE_URL = 'https://api.jobtread.com/pave'
 
@@ -289,11 +290,27 @@ async function listAllJobs(): Promise<Job[]> {
   return all
 }
 
+// Staging (without read-all): fetch only the allowlisted test jobs instead of scanning the org.
+async function listAllowedJobs(): Promise<Job[]> {
+  const jobs: Job[] = []
+  for (const id of allowedJobIds()) {
+    const { tasks: _t, documents: _d, comments: _c, ...job } = await getJob(id)
+    jobs.push(job)
+  }
+  return jobs
+}
+
 export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
   const { search, statuses, stages } = options
 
   let allJobs: Job[]
-  if (search) {
+  if (isStaging() && !stagingReadAll()) {
+    allJobs = await listAllowedJobs()
+    if (search) {
+      const needle = search.toLowerCase()
+      allJobs = allJobs.filter(j => j.name.toLowerCase().includes(needle))
+    }
+  } else if (search) {
     const jobsParam: Record<string, unknown> = {
       $: { where: ['name', 'like', `%${search}%`] },
       nodes: {
@@ -400,6 +417,13 @@ async function fetchJobTasksInWindow(jobId: string, from: string, to: string): P
 // Queries each job individually with an AND date filter — one request per job,
 // no org-level cap issues, works correctly regardless of tasks-per-job count.
 export async function listJobTasksInWindow(jobIds: string[], from: string, to: string): Promise<OrgTask[]> {
+  // Callers pass job IDs from project_channels; in staging, drop any that aren't readable
+  // (e.g. rows left over from a read-all run) rather than failing the whole run.
+  const blocked = jobIds.filter(id => !canReadJob(id))
+  if (blocked.length > 0) {
+    console.warn(`[staging guard] listJobTasksInWindow skipping non-allowlisted jobs: ${blocked.join(', ')}`)
+    jobIds = jobIds.filter(canReadJob)
+  }
   const all: OrgTask[] = []
   const CONCURRENCY = 2
   const BATCH_DELAY_MS = 300
@@ -416,6 +440,7 @@ export async function listJobTasksInWindow(jobIds: string[], from: string, to: s
 }
 
 export async function getJob(jobId: string): Promise<JobDetail> {
+  assertCanReadJob(jobId, 'getJob')
   const data = await pave({
     job: {
       $: { id: jobId },
@@ -492,6 +517,7 @@ export async function getJob(jobId: string): Promise<JobDetail> {
 }
 
 export async function getJobTasks(jobId: string): Promise<Task[]> {
+  assertCanReadJob(jobId, 'getJobTasks')
   const data = await pave({
     job: {
       $: { id: jobId },
@@ -525,6 +551,7 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
 }
 
 export async function getJobDocuments(jobId: string): Promise<Document[]> {
+  assertCanReadJob(jobId, 'getJobDocuments')
   const data = await pave({
     job: {
       $: { id: jobId },
@@ -546,6 +573,7 @@ export async function getJobDocuments(jobId: string): Promise<Document[]> {
 }
 
 export async function getJobComments(jobId: string): Promise<Comment[]> {
+  assertCanReadJob(jobId, 'getJobComments')
   const data = await pave({
     job: {
       $: { id: jobId },
@@ -570,6 +598,7 @@ export async function getJobComments(jobId: string): Promise<Comment[]> {
 // --- Mutation helpers ---
 
 export async function createComment(jobId: string, message: string): Promise<void> {
+  assertCanWriteJob(jobId, 'createComment')
   await pave({
     createComment: {
       $: { targetId: jobId, targetType: 'job', message },
@@ -579,6 +608,7 @@ export async function createComment(jobId: string, message: string): Promise<voi
 }
 
 export async function updateJob(jobId: string, input: UpdateJobInput): Promise<Job> {
+  assertCanWriteJob(jobId, 'updateJob')
   const data = await pave({
     updateJob: {
       $: { input: { id: jobId, ...input } },
@@ -598,7 +628,16 @@ export async function updateJob(jobId: string, input: UpdateJobInput): Promise<J
   return data.updateJob as Job
 }
 
+// updateTask only receives a task ID, so in staging look up the owning job first.
+async function getTaskJobId(taskId: string): Promise<string> {
+  const data = await pave({ task: { $: { id: taskId }, job: { id: true } } })
+  const jobId = ((data.task as Record<string, unknown> | null)?.job as { id?: string } | undefined)?.id
+  if (!jobId) throw new Error(`[staging guard] could not resolve job for task ${taskId}`)
+  return jobId
+}
+
 export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<void> {
+  if (isStaging()) assertCanWriteJob(await getTaskJobId(taskId), 'updateTask')
   await pave({
     updateTask: {
       $: { id: taskId, ...input },
@@ -615,6 +654,7 @@ export async function completeTask(taskId: string): Promise<void> {
 }
 
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {
+  assertCanWriteJob(jobId, 'createTask')
   const data = await pave({
     createTask: {
       $: { input: { jobId, ...input } },

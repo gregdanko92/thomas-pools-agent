@@ -5,6 +5,7 @@ import { postMessage } from '../integrations/slack'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { cronsEnabled } from '../lib/env'
 
 const TZ = 'America/Los_Angeles'
 
@@ -160,6 +161,7 @@ export async function runPaymentReminders(): Promise<PaymentReminderResult> {
 
 // Fires daily at 8 AM America/Los_Angeles — early enough for the team to act during business hours.
 export function startPaymentReminders(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 8 * * *', () => {
     withLock('payment-reminders', () => runPaymentReminders()).catch(async err => {
       console.error('[payment-reminders]', err instanceof Error ? err.message : err)

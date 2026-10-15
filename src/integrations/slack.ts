@@ -1,5 +1,6 @@
 import { App, LogLevel } from '@slack/bolt'
 import { withRetry } from '../lib/retry'
+import { isStaging, testChannelId } from '../lib/env'
 import type {
   Middleware,
   SlackCommandMiddlewareArgs,
@@ -38,12 +39,32 @@ export function getApp(): App {
   return _app
 }
 
+// Backstop: in staging the bot may only post to the test channel, whatever the caller asked for.
+function assertPostable(channel: string): void {
+  if (isStaging() && channel !== testChannelId()) {
+    throw new Error(`[staging guard] post to ${channel} blocked: staging may only post to SLACK_TEST_CHANNEL_ID`)
+  }
+}
+
+// Resolves the Slack app ID behind SLACK_BOT_TOKEN (used by the startup config check).
+export async function getSlackAppId(): Promise<string> {
+  const client = getApp().client
+  const auth = await withRetry(() => client.auth.test())
+  if (!auth.bot_id) throw new Error('Slack auth.test returned no bot_id')
+  const info = await withRetry(() => client.bots.info({ bot: auth.bot_id }))
+  const appId = info.bot?.app_id
+  if (!appId) throw new Error('Slack bots.info returned no app_id')
+  return appId
+}
+
 export async function postMessage(channel: string, text: string): Promise<void> {
+  assertPostable(channel)
   await withRetry(() => getApp().client.chat.postMessage({ channel, text }))
 }
 
 // Returns the message timestamp (ts), which serves as thread_ts for replies
 export async function postMessageWithTs(channel: string, text: string): Promise<string> {
+  assertPostable(channel)
   const res = await withRetry(() => getApp().client.chat.postMessage({ channel, text }))
   const ts = res.ts
   if (!ts) throw new Error('Slack postMessage returned no ts')
@@ -51,6 +72,7 @@ export async function postMessageWithTs(channel: string, text: string): Promise<
 }
 
 export async function postInThread(channel: string, threadTs: string, text: string): Promise<void> {
+  assertPostable(channel)
   await withRetry(() => getApp().client.chat.postMessage({ channel, thread_ts: threadTs, text }))
 }
 
@@ -59,6 +81,7 @@ export async function postBlocks(
   blocks: (KnownBlock | Block)[],
   fallbackText: string,
 ): Promise<void> {
+  assertPostable(channel)
   await withRetry(() => getApp().client.chat.postMessage({ channel, blocks, text: fallbackText }))
 }
 
@@ -95,8 +118,10 @@ export async function lookupUserByName(name: string): Promise<string | null> {
   return null
 }
 
+// Two Slack apps in one workspace can't share a command name, so staging registers
+// "/<name>-staging" (the staging Slack app must define the command under that name).
 export function registerSlashCommand(command: string, handler: SlashCommandHandler): void {
-  getApp().command(command, handler)
+  getApp().command(isStaging() ? `${command}-staging` : command, handler)
 }
 
 export function registerMessageListener(

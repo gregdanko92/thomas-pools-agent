@@ -7,6 +7,7 @@ import { complete } from '../integrations/claude'
 import { supabase } from '../db/client'
 import { postErrorAlert } from '../lib/errorAlert'
 import { withLock } from '../lib/cronLock'
+import { cronsEnabled } from '../lib/env'
 
 const ACTIVE_STAGES = STAGE_ORDER.filter(s => s !== 'On Hold')
 const TZ = 'America/Los_Angeles'
@@ -164,6 +165,7 @@ export async function runMorningHealthCheck(): Promise<void> {
 
 // Fires daily at 7 AM America/Los_Angeles — construction crews work weekends.
 export function startMorningHealthCheck(): void {
+  if (!cronsEnabled()) return
   cron.schedule('0 7 * * *', () => {
     withLock('morning-health-check', () => runMorningHealthCheck()).catch(async err => {
       console.error('[morning-health-check]', err instanceof Error ? err.message : err)
