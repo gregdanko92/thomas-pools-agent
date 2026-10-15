@@ -9,8 +9,6 @@
     "dev": "ts-node src/index.ts",
     "staging:trigger": "npx tsx scripts/staging/trigger.ts",
     "staging:reset-db": "npx tsx scripts/staging/reset-db.ts",
-    "staging:save-job": "npx tsx scripts/staging/job-baseline.ts save",
-    "staging:reset-job": "npx tsx scripts/staging/job-baseline.ts restore",
     "dev:staging": "DOTENV_CONFIG_PATH=.env.staging npx tsx src/index.ts"
   },
   "repository": {
