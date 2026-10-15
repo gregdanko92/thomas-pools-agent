@@ -230,10 +230,11 @@ export async function runRequirementReminders(): Promise<void> {
   }).then(() => undefined, () => undefined)
 }
 
-// Fires at 4 PM Mon–Fri
+// Fires at 4:05 PM Mon–Fri, after pmCheckin and the hourly calendar sync have started,
+// so the three don't all hit Jobtread at once.
 export function startRequirementReminders(): void {
   if (!cronsEnabled()) return
-  cron.schedule('0 16 * * 1-5', () => {
+  cron.schedule('5 16 * * 1-5', () => {
     withLock('requirement-reminders', () => runRequirementReminders()).catch(async err => {
       console.error('[requirement-reminders]', err instanceof Error ? err.message : err)
       await postErrorAlert('requirement-reminders', err)
