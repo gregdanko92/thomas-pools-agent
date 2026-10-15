@@ -575,6 +575,66 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
   return tasks
 }
 
+// Everything the requirement reminders need for one job: Status, PM, the raw custom field
+// values (booleans stay booleans) and every task with its progress (1 = complete).
+export interface RequirementTask {
+  id: string
+  name: string
+  startDate: string | null
+  endDate: string | null
+  progress: number | null
+}
+
+export interface RequirementJob {
+  id: string
+  name: string
+  stage: string | null
+  pm: string | null
+  location: JobLocation | null
+  fieldValues: Map<string, unknown>
+  tasks: RequirementTask[]
+}
+
+export async function getJobRequirementData(jobId: string): Promise<RequirementJob> {
+  assertCanReadJob(jobId, 'getJobRequirementData')
+  const data = await pave({
+    job: {
+      $: { id: jobId },
+      id: true,
+      name: true,
+      location: { id: true, name: true, address: true },
+      customFieldValues: {
+        $: { size: PAVE_MAX_SIZE },
+        nodes: { value: true, customField: { id: true } },
+      },
+      tasks: {
+        $: { size: PAVE_MAX_SIZE },
+        nodes: { id: true, name: true, startDate: true, endDate: true, progress: true },
+      },
+    },
+  })
+
+  const raw = data.job as Record<string, unknown> | null
+  if (!raw) throw new Error(`Jobtread job ${jobId} not found`)
+  const cfvNodes = (raw.customFieldValues as { nodes: Array<{ value: unknown; customField: { id: string } }> }).nodes ?? []
+  const taskNodes = (raw.tasks as { nodes: Array<Record<string, unknown>> }).nodes ?? []
+  return {
+    id: raw.id as string,
+    name: raw.name as string,
+    stage: extractStage(raw),
+    pm: extractPm(raw),
+    location: (raw.location as JobLocation | null) ?? null,
+    fieldValues: new Map(cfvNodes.map(n => [n.customField.id, n.value])),
+    tasks: taskNodes.map(t => ({
+      id: t.id as string,
+      name: t.name as string,
+      startDate: (t.startDate as string | null) ?? null,
+      endDate: (t.endDate as string | null) ?? null,
+      progress: (t.progress as number | null) ?? null,
+    })),
+  }
+}
+
 export async function getJobDocuments(jobId: string): Promise<Document[]> {
   assertCanReadJob(jobId, 'getJobDocuments')
   const data = await pave({

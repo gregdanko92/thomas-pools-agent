@@ -99,6 +99,30 @@ CREATE TABLE public.daily_reports (
 
 
 --
+-- Name: job_requirements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.job_requirements (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    jobtread_job_id text NOT NULL,
+    jobtread_job_name text DEFAULT ''::text NOT NULL,
+    requirement_key text NOT NULL,
+    state text DEFAULT 'needs_scheduling'::text NOT NULL,
+    jobtread_task_id text,
+    scheduled_date date,
+    slack_channel_id text,
+    thread_ts text,
+    warning_thread_ts text,
+    pm_name text,
+    conversation_history jsonb DEFAULT '[]'::jsonb NOT NULL,
+    last_pinged_date date,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT job_requirements_state_check CHECK ((state = ANY (ARRAY['needs_scheduling'::text, 'scheduled'::text, 'completed'::text])))
+);
+
+
+--
 -- Name: outreach_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -228,6 +252,22 @@ ALTER TABLE ONLY public.daily_reports
 
 
 --
+-- Name: job_requirements job_requirements_job_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.job_requirements
+    ADD CONSTRAINT job_requirements_job_key UNIQUE (jobtread_job_id, requirement_key);
+
+
+--
+-- Name: job_requirements job_requirements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.job_requirements
+    ADD CONSTRAINT job_requirements_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: outreach_log outreach_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -314,6 +354,12 @@ ALTER TABLE public.cron_locks ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.daily_reports ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: job_requirements; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.job_requirements ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: outreach_log; Type: ROW SECURITY; Schema: public; Owner: -
