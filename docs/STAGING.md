@@ -10,7 +10,7 @@ production needs cleaning up afterwards.
 | System | Staging behavior |
 |---|---|
 | **Supabase** | Separate staging project. Wipe it any time with `npm run staging:reset-db`. |
-| **Slack** | Separate "Thomas Pools Agent (Staging)" app. Every post is forced to `SLACK_TEST_CHANNEL_ID`. Posts elsewhere throw. Check-ins and nudges carry a `[TEST MODE — Intended Target: …]` header. The slash command is `/jobstatus-staging`. |
+| **Slack** | Separate "Thomas Pools Agent (Staging)" app. Every post is forced to ok g`SLACK_TEST_CHANNEL_ID`. Posts elsewhere throw. Check-ins and nudges carry a `[TEST MODE — Intended Target: …]` header. The slash command is `/jobstatus-staging`. |
 | **Jobtread** | Same org. Reads and writes are limited to `JOBTREAD_ALLOWED_JOB_IDS` (the test job). With `JOBTREAD_STAGING_READ_ALL=true`, reads see every real job but writes stay limited to the test job. |
 | **Google Calendar** | Separate test calendar. Calendar sync only writes events for allowlisted jobs, even with read-all on. |
 | **Crons** | Off. Trigger them with `npm run staging:trigger -- <name>`. Set `CRONS_ENABLED=true` to turn the schedules on. |
@@ -47,7 +47,7 @@ The production fingerprints live in `src/lib/env.ts`.
 5. Rename the slash command to **`/jobstatus-staging`**.
 6. Subscribe to the same bot events as production (message events).
 7. Install it to the workspace and copy the bot token (`SLACK_BOT_TOKEN`).
-8. Create `#tpagent-staging-test` if needed and invite **only** the staging bot. Copy the channel ID into `SLACK_TEST_CHANNEL_ID` and all the `SLACK_*_CHANNEL` settings.
+8. Create `#tpagent-staging-test1` if needed and invite **only** the staging bot. Copy the channel ID into `SLACK_TEST_CHANNEL_ID` and all the `SLACK_*_CHANNEL` settings.
 
 > Staging must never use the production Slack tokens. Socket Mode splits events between every connection on the same app token, so production would randomly miss PM replies. The startup check blocks this.
 
@@ -68,8 +68,7 @@ Copy `.env.staging.example` to `.env.staging` (it's gitignored) and fill in the 
 
 ### 6. Seed staging
 ```
-npm run staging:reset-db     # maps the test job to #tpagent-staging-test in the staging DB
-npm run staging:save-job     # records the test job's task dates as the reset baseline
+npm run staging:reset-db     # maps the test job to #tpagent-staging-test1 in the staging DB
 ```
 
 ### 7. Production cleanup
@@ -88,9 +87,9 @@ In Railway production, delete `SLACK_TEST_MODE` and `SLACK_TEST_CHANNEL_ID`. The
    Railway's staging environment redeploys in about a minute. Production is untouched.
 3. **Trigger it.**
    - Cron features: `npm run staging:trigger -- pm-checkin` (or `morning`, `evening`, `schedule-nudge`, `calendar-sync`, `channel-sync`, `payment-reminders`, `vendor-outreach`).
-   - Slack features: interact in `#tpagent-staging-test`. For example, reply in a check-in thread, or run `/jobstatus-staging`.
+   - Slack features: interact in `#tpagent-staging-test1`. For example, reply in a check-in thread, or run `/jobstatus-staging`.
 4. **Check the results.**
-   - `#tpagent-staging-test` for messages
+   - `#tpagent-staging-test1` for messages
    - The test job in Jobtread for task date changes and comments
    - The staging Supabase table editor for rows
    - Railway staging logs. A `[staging guard]` error means the code tried to touch something real and was blocked.
@@ -98,12 +97,12 @@ In Railway production, delete `SLACK_TEST_MODE` and `SLACK_TEST_CHANNEL_ID`. The
 6. **Reset when leftover state gets in the way** (not after every test):
    ```
    npm run staging:reset-db     # wipe staging DB, re-seed the test job mapping
-   npm run staging:reset-job    # put the test job's task dates back to the baseline
    ```
+   Test job task dates are set by hand in Jobtread before each test. PM check-ins only cover tasks ending in the next 5 days, so move a task into that window first.
 7. **Ship.** Merge the PR to `main`. Production deploys, and you watch the next real run in the production logs.
 
 ### Previewing reports with real data
-Set `JOBTREAD_STAGING_READ_ALL=true` in Railway staging, then trigger `morning` or `evening`. The report covers every real job but lands only in `#tpagent-staging-test`. Turn it back off afterwards to keep staging quiet and light on Jobtread API calls.
+Set `JOBTREAD_STAGING_READ_ALL=true` in Railway staging, then trigger `morning` or `evening`. The report covers every real job but lands only in `#tpagent-staging-test1`. Turn it back off afterwards to keep staging quiet and light on Jobtread API calls.
 
 ### Schema changes
 If a feature adds a table or column, apply the migration to staging Supabase before step 2. Apply it to production right before merging in step 7.
