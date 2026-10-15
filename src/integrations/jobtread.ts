@@ -7,6 +7,16 @@ const PAVE_URL = 'https://api.jobtread.com/pave'
 const STAGE_FIELD_ID = '22PAqEaW5wPt'
 const PM_FIELD_ID = '22PZNLLQSfgf'
 
+// Pave connections return 10 nodes unless a size is given; 100 is the maximum it accepts.
+// Without it, jobs with >10 tasks silently lose their later (upcoming) tasks.
+const PAVE_MAX_SIZE = 100
+
+// Pave rejects (413) queries whose worst-case node count is too large, so 100 tasks x 10
+// dependents fails. getJobTasks fetches a small page of dependents per task and refetches
+// any task whose page came back full.
+const DEPENDENTS_PAGE_SIZE = 5
+const DEPENDENT_TASK_FIELDS = { id: true, name: true, startDate: true, endDate: true }
+
 export const STAGE_ORDER: string[] = [
   'Sold',
   'Engineering / Permitting',
@@ -243,6 +253,7 @@ async function fetchJobsWithPrefix(prefix: string): Promise<Job[]> {
       closedOn: true,
       location: { id: true, name: true, address: true },
       customFieldValues: {
+        $: { size: PAVE_MAX_SIZE },
         nodes: { value: true, customField: { id: true } },
       },
     },
@@ -319,6 +330,7 @@ export async function listJobs(options: ListJobsOptions = {}): Promise<Job[]> {
         id: true, name: true, status: true, createdAt: true, closedOn: true,
         location: { id: true, name: true, address: true },
         customFieldValues: {
+          $: { size: PAVE_MAX_SIZE },
           nodes: { value: true, customField: { id: true } },
         },
       },
@@ -382,9 +394,9 @@ async function fetchJobTasksInWindow(jobId: string, from: string, to: string): P
       id: true,
       name: true,
       location: { id: true, name: true, address: true },
-      customFieldValues: { nodes: { value: true, customField: { id: true } } },
+      customFieldValues: { $: { size: PAVE_MAX_SIZE }, nodes: { value: true, customField: { id: true } } },
       tasks: {
-        $: { where: { and: [['endDate', '>=', from], ['endDate', '<=', to]] } },
+        $: { size: PAVE_MAX_SIZE, where: { and: [['endDate', '>=', from], ['endDate', '<=', to]] } },
         nodes: {
           id: true,
           name: true,
@@ -457,9 +469,11 @@ export async function getJob(jobId: string): Promise<JobDetail> {
         address: true,
       },
       customFieldValues: {
+        $: { size: PAVE_MAX_SIZE },
         nodes: { value: true, customField: { id: true } },
       },
       tasks: {
+        $: { size: PAVE_MAX_SIZE },
         nodes: {
           id: true,
           name: true,
@@ -524,6 +538,7 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
     job: {
       $: { id: jobId },
       tasks: {
+        $: { size: PAVE_MAX_SIZE },
         nodes: {
           id: true,
           name: true,
@@ -535,12 +550,8 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
             name: true,
           },
           dependentTasks: {
-            nodes: {
-              id: true,
-              name: true,
-              startDate: true,
-              endDate: true,
-            },
+            $: { size: DEPENDENTS_PAGE_SIZE },
+            nodes: DEPENDENT_TASK_FIELDS,
           },
         },
       },
@@ -548,8 +559,20 @@ export async function getJobTasks(jobId: string): Promise<Task[]> {
   })
 
   const job = data.job as Record<string, unknown>
-  const tasks = job.tasks as { nodes: Array<Record<string, unknown>> }
-  return tasks.nodes.map(mapTask)
+  const tasks = (job.tasks as { nodes: Array<Record<string, unknown>> }).nodes.map(mapTask)
+
+  // A full page of dependents may be truncated — refetch those tasks' dependents in full.
+  for (const task of tasks) {
+    if (task.dependentTasks.length < DEPENDENTS_PAGE_SIZE) continue
+    const full = await pave({
+      task: {
+        $: { id: task.id },
+        dependentTasks: { $: { size: PAVE_MAX_SIZE }, nodes: DEPENDENT_TASK_FIELDS },
+      },
+    })
+    task.dependentTasks = mapTask({ ...(full.task as Record<string, unknown>), id: task.id }).dependentTasks
+  }
+  return tasks
 }
 
 export async function getJobDocuments(jobId: string): Promise<Document[]> {
@@ -657,20 +680,24 @@ export async function completeTask(taskId: string): Promise<void> {
 
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {
   assertCanWriteJob(jobId, 'createTask')
+  // Pave mutations take flat params and return the new node under `createdTask`.
   const data = await pave({
     createTask: {
-      $: { input: { jobId, ...input } },
-      id: true,
-      name: true,
-      isToDo: true,
-      startDate: true,
-      endDate: true,
-      account: {
+      $: { targetId: jobId, targetType: 'job', ...input },
+      createdTask: {
         id: true,
         name: true,
+        isToDo: true,
+        startDate: true,
+        endDate: true,
+        account: {
+          id: true,
+          name: true,
+        },
       },
     },
   })
 
-  return mapTask(data.createTask as Record<string, unknown>)
+  const result = data.createTask as { createdTask: Record<string, unknown> }
+  return mapTask(result.createdTask)
 }
