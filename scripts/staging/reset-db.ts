@@ -14,6 +14,7 @@ const TABLES: Array<{ name: string; key: string }> = [
   { name: 'agent_run_log', key: 'id' },
   { name: 'calendar_sync', key: 'id' },
   { name: 'pm_checkin_threads', key: 'id' },
+  { name: 'job_requirements', key: 'id' },
   { name: 'project_channels', key: 'id' },
   { name: 'daily_reports', key: 'id' },
   { name: 'cron_locks', key: 'lock_name' },

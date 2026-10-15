@@ -3,6 +3,7 @@ import Fastify from 'fastify'
 import { startSlackApp, getSlackAppId } from './integrations/slack'
 import { registerStatusCommand } from './cases/status'
 import { registerPmCheckinReplyHandler } from './cases/pmCheckinReply'
+import { registerRequirementReplyHandler } from './cases/requirementReply'
 import { startMorningHealthCheck, runMorningHealthCheck } from './cron/morningHealthCheck'
 import { startEveningReport, runEveningReport } from './cron/eveningReport'
 import { startVendorOutreach, runVendorOutreach } from './cron/vendorOutreach'
@@ -11,6 +12,7 @@ import { startPaymentReminders, runPaymentReminders } from './cron/paymentRemind
 import { startPmCheckin, runPmCheckin } from './cron/pmCheckin'
 import { startChannelSync, runChannelSync } from './cron/channelSync'
 import { startScheduleNudge, runScheduleNudge } from './cron/scheduleNudge'
+import { startRequirementReminders, runRequirementReminders } from './cron/requirementReminders'
 import { postErrorAlert } from './lib/errorAlert'
 import { withLock } from './lib/cronLock'
 import { appEnv, assertSafeConfig, cronsEnabled } from './lib/env'
@@ -117,6 +119,18 @@ server.post('/cron/schedule-nudge', async (req, reply) => {
   return reply.status(202).send({ triggered: true })
 })
 
+server.post('/cron/requirements', async (req, reply) => {
+  const secret = process.env.CRON_SECRET
+  if (secret && req.headers['x-cron-secret'] !== secret) {
+    return reply.status(401).send({ error: 'unauthorized' })
+  }
+  withLock('requirement-reminders', () => runRequirementReminders()).catch(async err => {
+    server.log.error({ err }, 'manual requirement reminders failed')
+    await postErrorAlert('requirement-reminders:manual', err)
+  })
+  return reply.status(202).send({ triggered: true })
+})
+
 const start = async () => {
   try {
     // Refuse to start if e.g. staging is holding production credentials.
@@ -124,6 +138,7 @@ const start = async () => {
     server.log.info({ appEnv: appEnv(), cronsEnabled: cronsEnabled() }, 'environment check passed')
     registerStatusCommand()
     registerPmCheckinReplyHandler()
+    registerRequirementReplyHandler()
     startMorningHealthCheck()
     startEveningReport()
     startVendorOutreach()
@@ -132,6 +147,7 @@ const start = async () => {
     startPmCheckin()
     startChannelSync()
     startScheduleNudge()
+    startRequirementReminders()
     const port = Number(process.env.PORT) || 3000
     await server.listen({ port, host: '0.0.0.0' })
     await startSlackApp()

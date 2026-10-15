@@ -1,8 +1,8 @@
 // Fires a cron on the deployed staging service.
-// Usage: npm run staging:trigger -- <name>   e.g. pm-checkin, morning, evening, schedule-nudge
+// Usage: npm run staging:trigger -- <name>   e.g. pm-checkin, morning, evening, schedule-nudge, requirements
 import './loadEnv'
 
-const CRONS = ['morning', 'evening', 'vendor-outreach', 'calendar-sync', 'payment-reminders', 'pm-checkin', 'channel-sync', 'schedule-nudge']
+const CRONS = ['morning', 'evening', 'vendor-outreach', 'calendar-sync', 'payment-reminders', 'pm-checkin', 'channel-sync', 'schedule-nudge', 'requirements']
 
 async function main() {
   const name = process.argv[2]
