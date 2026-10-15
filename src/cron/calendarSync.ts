@@ -12,7 +12,7 @@ const TZ = 'America/Los_Angeles'
 const ACTIVE_STAGES = [
   'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
   'Plumbing / Electric', 'Gunnite', 'Coping / Tile',
-  'Hardscape / Landscape', 'Fence & Gate', 'Plaster',
+  'Hardscape', 'Fence & Gate', 'Plaster',
 ]
 
 export interface CalendarSyncResult {

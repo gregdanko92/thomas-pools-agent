@@ -15,7 +15,7 @@ const ACTIVE_STAGES = new Set([
   'Plumbing / Electric',
   'Gunnite',
   'Coping / Tile',
-  'Hardscape / Landscape',
+  'Hardscape',
   'Fence & Gate',
   'Plaster',
 ])

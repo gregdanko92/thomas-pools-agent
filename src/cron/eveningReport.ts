@@ -11,7 +11,7 @@ import { cronsEnabled } from '../lib/env'
 const ACTIVE_STAGES = [
   'Sold', 'On Hold', 'Engineering / Permitting', 'Excavation',
   'Plumbing / Electric', 'Gunnite', 'Coping / Tile',
-  'Hardscape / Landscape', 'Fence & Gate', 'Plaster',
+  'Hardscape', 'Fence & Gate', 'Plaster',
 ]
 const TZ = 'America/Los_Angeles'
 
