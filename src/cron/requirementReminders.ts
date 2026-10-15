@@ -115,7 +115,8 @@ export async function runRequirementReminders(): Promise<void> {
 
     const jobName = displayName(job.name, job.location)
     const targetChannel = testMode ? testChannelId! : channelId
-    const pmUserId = testMode ? null : await lookupUserByName(job.pm)
+    // A failed Slack user lookup falls back to the plain PM name rather than aborting the run.
+    const pmUserId = testMode ? null : await lookupUserByName(job.pm).catch(() => null)
     const pmRef = pmUserId ? `<@${pmUserId}>` : job.pm
     const targetLabel = `${job.pm} in #${channelId}`
 
@@ -127,98 +128,105 @@ export async function runRequirementReminders(): Promise<void> {
 
     for (const requirement of applicable) {
       const label = `${job.name} / ${requirement.taskName}`
-      const row = rowByKey.get(`${jobId}:${requirement.key}`)
-      if (row?.state === 'completed') continue
+      // Each requirement is isolated: a failed Slack post or DB write is logged and alerted,
+      // and the run moves on instead of skipping every job after this one.
+      try {
+        const row = rowByKey.get(`${jobId}:${requirement.key}`)
+        if (row?.state === 'completed') continue
 
-      const task = findRequirementTask(requirement, job.tasks, row?.jobtread_task_id ?? null, claimedTaskIds)
-      if (task) claimedTaskIds.add(task.id)
-      const taskFields = {
-        jobtread_job_name: jobName,
-        jobtread_task_id: task?.id ?? null,
-        scheduled_date: task?.startDate ?? task?.endDate ?? null,
-        pm_name: job.pm,
-      }
+        const task = findRequirementTask(requirement, job.tasks, row?.jobtread_task_id ?? null, claimedTaskIds)
+        if (task) claimedTaskIds.add(task.id)
+        const taskFields = {
+          jobtread_job_name: jobName,
+          jobtread_task_id: task?.id ?? null,
+          scheduled_date: task?.startDate ?? task?.endDate ?? null,
+          pm_name: job.pm,
+        }
 
-      if (task?.progress === 1) {
-        await upsertRequirementRow(jobId, requirement.key, { ...taskFields, state: 'completed' })
-        continue
-      }
+        if (task?.progress === 1) {
+          await upsertRequirementRow(jobId, requirement.key, { ...taskFields, state: 'completed' })
+          continue
+        }
 
-      const history = row?.conversation_history ?? []
-      const pingedToday = row?.last_pinged_date === today
+        const history = row?.conversation_history ?? []
+        const pingedToday = row?.last_pinged_date === today
 
-      // At or past the due-by status and not complete: a new top-level warning, then a
-      // daily follow-up in that warning's thread until the task is ticked off.
-      if (isAtOrPast(job.stage, requirement.dueBy)) {
-        const state: RequirementState = taskFields.scheduled_date ? 'scheduled' : 'needs_scheduling'
-        if (!row?.warning_thread_ts) {
+        // At or past the due-by status and not complete: a new top-level warning, then a
+        // daily follow-up in that warning's thread until the task is ticked off.
+        if (isAtOrPast(job.stage, requirement.dueBy)) {
+          const state: RequirementState = taskFields.scheduled_date ? 'scheduled' : 'needs_scheduling'
+          if (!row?.warning_thread_ts) {
+            const body = withTestHeader(
+              `⚠️ ${pmRef}, *${jobName}* is in *${job.stage}* and *${requirement.taskName}* isn't marked complete. ` +
+              `Has it been done? Reply "done" and I'll check it off in Jobtread, or reply with the date it's scheduled.`,
+              testMode, targetLabel,
+            )
+            const ts = await postMessageWithTs(targetChannel, body)
+            await upsertRequirementRow(jobId, requirement.key, {
+              ...taskFields,
+              state,
+              slack_channel_id: targetChannel,
+              warning_thread_ts: ts,
+              conversation_history: [...history, { role: 'agent', content: body }],
+              last_pinged_date: today,
+            })
+            warned.push(label)
+          } else if (!pingedToday) {
+            const body = `${pmRef}, following up — *${requirement.taskName}* for *${jobName}* still isn't marked complete. Has it been done?`
+            await postInThread(targetChannel, row.warning_thread_ts, body)
+            await upsertRequirementRow(jobId, requirement.key, {
+              ...taskFields,
+              state,
+              conversation_history: [...history, { role: 'agent', content: body }],
+              last_pinged_date: today,
+            })
+            warned.push(`${label} (follow-up)`)
+          } else {
+            skipped.push(`${label} — already pinged today`)
+          }
+          continue
+        }
+
+        // On the Gantt with a date: pmCheckin takes it from here once it's within 5 days.
+        if (task && taskFields.scheduled_date) {
+          await upsertRequirementRow(jobId, requirement.key, { ...taskFields, state: 'scheduled' })
+          continue
+        }
+
+        // Needs scheduling: one thread per job and requirement, followed up daily.
+        if (!row?.thread_ts) {
           const body = withTestHeader(
-            `⚠️ ${pmRef}, *${jobName}* is in *${job.stage}* and *${requirement.taskName}* isn't marked complete. ` +
-            `Has it been done? Reply "done" and I'll check it off in Jobtread, or reply with the date it's scheduled.`,
+            `${pmRef}, *${jobName}* is in *${job.stage}* and needs a *${requirement.taskName}* ` +
+            `(the job's ${requirement.fieldName} field is set to Yes). It has to be done before ${requirement.dueBy}. ` +
+            `When is it scheduled? Reply here with the date and I'll put it on the Gantt.`,
             testMode, targetLabel,
           )
           const ts = await postMessageWithTs(targetChannel, body)
           await upsertRequirementRow(jobId, requirement.key, {
             ...taskFields,
-            state,
+            state: 'needs_scheduling',
             slack_channel_id: targetChannel,
-            warning_thread_ts: ts,
+            thread_ts: ts,
             conversation_history: [...history, { role: 'agent', content: body }],
             last_pinged_date: today,
           })
-          warned.push(label)
+          pinged.push(label)
         } else if (!pingedToday) {
-          const body = `${pmRef}, following up — *${requirement.taskName}* for *${jobName}* still isn't marked complete. Has it been done?`
-          await postInThread(targetChannel, row.warning_thread_ts, body)
+          const body = `${pmRef}, following up — when is the *${requirement.taskName}* scheduled for *${jobName}*? Reply with the date and I'll add it to the Gantt.`
+          await postInThread(targetChannel, row.thread_ts, body)
           await upsertRequirementRow(jobId, requirement.key, {
             ...taskFields,
-            state,
+            state: 'needs_scheduling',
             conversation_history: [...history, { role: 'agent', content: body }],
             last_pinged_date: today,
           })
-          warned.push(`${label} (follow-up)`)
+          pinged.push(`${label} (follow-up)`)
         } else {
           skipped.push(`${label} — already pinged today`)
         }
-        continue
-      }
-
-      // On the Gantt with a date: pmCheckin takes it from here once it's within 5 days.
-      if (task && taskFields.scheduled_date) {
-        await upsertRequirementRow(jobId, requirement.key, { ...taskFields, state: 'scheduled' })
-        continue
-      }
-
-      // Needs scheduling: one thread per job and requirement, followed up daily.
-      if (!row?.thread_ts) {
-        const body = withTestHeader(
-          `${pmRef}, *${jobName}* is in *${job.stage}* and needs a *${requirement.taskName}* ` +
-          `(the job's ${requirement.fieldName} field is set to Yes). It has to be done before ${requirement.dueBy}. ` +
-          `When is it scheduled? Reply here with the date and I'll put it on the Gantt.`,
-          testMode, targetLabel,
-        )
-        const ts = await postMessageWithTs(targetChannel, body)
-        await upsertRequirementRow(jobId, requirement.key, {
-          ...taskFields,
-          state: 'needs_scheduling',
-          slack_channel_id: targetChannel,
-          thread_ts: ts,
-          conversation_history: [...history, { role: 'agent', content: body }],
-          last_pinged_date: today,
-        })
-        pinged.push(label)
-      } else if (!pingedToday) {
-        const body = `${pmRef}, following up — when is the *${requirement.taskName}* scheduled for *${jobName}*? Reply with the date and I'll add it to the Gantt.`
-        await postInThread(targetChannel, row.thread_ts, body)
-        await upsertRequirementRow(jobId, requirement.key, {
-          ...taskFields,
-          state: 'needs_scheduling',
-          conversation_history: [...history, { role: 'agent', content: body }],
-          last_pinged_date: today,
-        })
-        pinged.push(`${label} (follow-up)`)
-      } else {
-        skipped.push(`${label} — already pinged today`)
+      } catch (err) {
+        skipped.push(`${label} — failed: ${err instanceof Error ? err.message : err}`)
+        await postErrorAlert(`requirement-reminders:${jobId}:${requirement.key}`, err)
       }
     }
   }
