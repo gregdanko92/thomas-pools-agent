@@ -18,6 +18,8 @@ export const STAGE_ORDER: string[] = [
   'Hardscape',
   'Fence & Gate',
   'Plaster',
+  'Final',
+  'Landscape/Touch-Ups/Front Yard',
 ]
 
 export function nextStage(current: string): string | null {
