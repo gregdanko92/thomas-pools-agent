@@ -678,20 +678,24 @@ export async function completeTask(taskId: string): Promise<void> {
 
 export async function createTask(jobId: string, input: CreateTaskInput): Promise<Task> {
   assertCanWriteJob(jobId, 'createTask')
+  // Pave mutations take flat params and return the new node under `createdTask`.
   const data = await pave({
     createTask: {
-      $: { input: { jobId, ...input } },
-      id: true,
-      name: true,
-      isToDo: true,
-      startDate: true,
-      endDate: true,
-      account: {
+      $: { targetId: jobId, targetType: 'job', ...input },
+      createdTask: {
         id: true,
         name: true,
+        isToDo: true,
+        startDate: true,
+        endDate: true,
+        account: {
+          id: true,
+          name: true,
+        },
       },
     },
   })
 
-  return mapTask(data.createTask as Record<string, unknown>)
+  const result = data.createTask as { createdTask: Record<string, unknown> }
+  return mapTask(result.createdTask)
 }
